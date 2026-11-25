@@ -13,5 +13,6 @@ Mở thư mục này, đợi Gradle đồng bộ, chọn *Build > Build APK(s)*.
 
 ## Lưu ý
 - Lần đầu mở app, hãy cho phép quyền **Thông báo** (Android 13+).
-- Nhắc nhở sẽ báo vào giờ bắt đầu của các khung giờ trong Thời khóa biểu, lặp lại hằng tuần.
+- 4 tab: Việc, Thời khóa biểu (lịch cố định hằng tuần), Kế hoạch (kế hoạch từng ngày), Phát sinh (lịch tháng).
+- Kế hoạch ngày = Thời khóa biểu + Phát sinh (Phát sinh được ưu tiên). Nhắc nhở báo vào giờ bắt đầu của từng đoạn việc trong Kế hoạch.
 - Nếu điện thoại có chế độ tiết kiệm pin mạnh (Xiaomi, Oppo, Samsung...), hãy tắt tối ưu pin cho app để báo đúng giờ.
