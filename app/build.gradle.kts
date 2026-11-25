@@ -12,13 +12,30 @@ android {
         applicationId = "com.quantri.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Số phiên bản hiển thị. Đổi số này khi phát hành bản mới (trùng với tên file zip: QA LifeOS Vx.y.z).
+        versionName = "1.0.0"
+        // Số bản dựng: mỗi lần GitHub build lại tăng lên, nên APK mới luôn cài đè được lên bản cũ.
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+    }
+
+    // Khóa ký CỐ ĐỊNH (file quantri.keystore nằm cạnh file này) để các bản APK đều cài đè lên nhau được.
+    signingConfigs {
+        create("fixed") {
+            storeFile = file("quantri.keystore")
+            storeType = "pkcs12"
+            storePassword = "quantri123"
+            keyAlias = "quantri"
+            keyPassword = "quantri123"
+        }
     }
 
     buildTypes {
-        release {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("fixed")
+        }
+        getByName("release") {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("fixed")
         }
     }
     compileOptions {

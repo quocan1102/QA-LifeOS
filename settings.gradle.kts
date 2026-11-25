@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "QuanTri"
+rootProject.name = "QA-LifeOS"
 include(":app")

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -74,6 +75,7 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
         if (Build.VERSION.SDK_INT >= 33) permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
+    var showAbout by remember { mutableStateOf(false) }
     val titles = listOf("Danh sách việc", "Thời khóa biểu", "Kế hoạch", "Phát sinh")
     val navItems = listOf(
         "Việc" to Icons.Default.Check,
@@ -83,7 +85,16 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
     )
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(titles[tab]) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text(titles[tab]) },
+                actions = {
+                    IconButton(onClick = { showAbout = true }) {
+                        Icon(Icons.Default.Info, contentDescription = "Giới thiệu")
+                    }
+                }
+            )
+        },
         bottomBar = {
             NavigationBar {
                 navItems.forEachIndexed { i, (label, icon) ->
@@ -110,6 +121,68 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
             }
         }
     }
+
+    if (showAbout) AboutDialog { showAbout = false }
+}
+
+@Composable
+fun AboutDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val version = remember {
+        runCatching {
+            val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+            @Suppress("DEPRECATION")
+            val build = info.versionCode
+            info.versionName + " (bản dựng " + build + ")"
+        }.getOrNull() ?: ""
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("QA LifeOS") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    "Hệ điều hành cuộc sống",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    "Làm chủ thời gian. Thiết kế cuộc sống. Kiến tạo phiên bản tốt hơn của chính mình.",
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    "QA LifeOS là hệ thống quản lý cá nhân toàn diện, giúp bạn chủ động tổ chức và điều hành " +
+                        "cuộc sống thông qua việc lập kế hoạch khoa học, quản lý lịch trình và theo dõi quá trình thực hiện."
+                )
+                Text(
+                    "Thay vì để công việc và những việc phát sinh chi phối thời gian, bạn có thể thiết kế trước " +
+                        "từng ngày, xác định thứ tự ưu tiên, phân bổ thời gian hợp lý và biến những mục tiêu " +
+                        "thành hành động cụ thể."
+                )
+                Text(
+                    "QA LifeOS không chỉ giúp bạn biết mình cần làm gì, mà còn giúp bạn duy trì kỷ luật, " +
+                        "theo sát kế hoạch, đánh giá kết quả và liên tục cải thiện cách sử dụng thời gian."
+                )
+                Text(
+                    "Đừng chỉ quản lý công việc. Hãy làm chủ cuộc sống của bạn.",
+                    fontWeight = FontWeight.Bold
+                )
+                HorizontalDivider()
+                Text("Nhà phát triển: Quốc Ân", style = MaterialTheme.typography.bodySmall)
+                if (version.isNotEmpty()) {
+                    Text(
+                        "Phiên bản $version",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Đóng") } }
+    )
 }
 
 @Composable

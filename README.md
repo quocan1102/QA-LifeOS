@@ -1,11 +1,14 @@
-# Quản Trị Bản Thân (Android)
+# QA LifeOS – Hệ điều hành cuộc sống (Android)
+
+Nhà phát triển: Quốc Ân
+Phiên bản: 1.0.0
 
 Ứng dụng lập kế hoạch và nhắc việc hằng ngày (Kotlin + Jetpack Compose, minSdk 26).
 
 ## Lấy file APK qua GitHub Actions (không cần cài Android Studio)
 1. Tạo repo mới trên GitHub, đẩy toàn bộ thư mục này lên nhánh `main`.
 2. Vào tab **Actions** > workflow **Build APK** (tự chạy sau mỗi lần push, hoặc bấm *Run workflow*).
-3. Khi chạy xong, mở lần chạy đó, tải mục **QuanTri-debug-apk** ở cuối trang (file zip chứa `app-debug.apk`).
+3. Khi chạy xong, mở lần chạy đó, tải mục **qa-life-os** ở cuối trang (file zip chứa `qa-life-os.apk`).
 4. Chép APK vào điện thoại, mở lên và cho phép "cài đặt từ nguồn không xác định".
 
 ## Hoặc build bằng Android Studio
