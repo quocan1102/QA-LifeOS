@@ -91,7 +91,7 @@ object Reminders {
                 alarmUri,
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIC)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build()
             )
             enableVibration(true)
