@@ -52,15 +52,19 @@ object Reminders {
         }
     }
 
-    /** Thời điểm của lần nhắc kế tiếp (sau `after`), tìm trong vòng ~400 ngày. */
-    fun nextEventAt(d: AppData, after: Long): Long? {
+    /** Lần nhắc kế tiếp (sau `after`), tìm trong vòng ~400 ngày. */
+    fun nextEvent(d: AppData, after: Long): Event? {
         val start = Instant.ofEpochMilli(after).atZone(ZoneId.systemDefault()).toLocalDate()
         for (i in 0..400) {
-            val times = eventsOn(start.plusDays(i.toLong()), d).map { it.at }.filter { it > after }
-            if (times.isNotEmpty()) return times.min()
+            val e = eventsOn(start.plusDays(i.toLong()), d)
+                .filter { it.at > after }
+                .minByOrNull { it.at }
+            if (e != null) return e
         }
         return null
     }
+
+    fun nextEventAt(d: AppData, after: Long): Long? = nextEvent(d, after)?.at
 
     /** Các lần nhắc có thời điểm trong khoảng (from, to]. */
     fun eventsBetween(d: AppData, from: Long, to: Long): List<Event> {
@@ -216,11 +220,13 @@ class AlarmReceiver : BroadcastReceiver() {
         Reminders.eventsBetween(data, from, upTo).forEach { Reminders.show(context, it) }
         repo.setLastFired(upTo)
         Reminders.reschedule(context, data, after = upTo)
+        KeepAlive.apply(context)
     }
 }
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Reminders.reschedule(context, Repository(context).load())
+        KeepAlive.apply(context)
     }
 }

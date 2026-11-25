@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,19 +46,27 @@ import java.time.LocalDate
 val StarColor = Color(0xFFF5A623)
 
 class MainActivity : ComponentActivity() {
+    // Tăng mỗi lần quay lại app (vd. từ màn hình cài đặt hệ thống) để cập nhật trạng thái quyền.
+    private var resumeTick by mutableIntStateOf(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF1E5AA8))) {
-                Surface(modifier = Modifier.fillMaxSize()) { AppRoot() }
+                Surface(modifier = Modifier.fillMaxSize()) { AppRoot(resumeTick) }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        resumeTick++
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppRoot(vm: MainViewModel = viewModel()) {
+fun AppRoot(resumeTick: Int, vm: MainViewModel = viewModel()) {
     val tasks by vm.tasks.collectAsState()
     val slots by vm.slots.collectAsState()
     val adhoc by vm.adhoc.collectAsState()
@@ -69,13 +78,23 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
         mutableStateOf(LocalDate.now().withDayOfMonth(1).toEpochDay())
     }
 
+    var showAbout by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    val keepAlive by vm.keepAlive.collectAsState()
+
     val permLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33) permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
+    // Lần mở đầu tiên: hiện hướng dẫn bật chạy nền
+    LaunchedEffect(Unit) {
+        if (!vm.setupShown()) {
+            showSettings = true
+            vm.markSetupShown()
+        }
+    }
 
-    var showAbout by remember { mutableStateOf(false) }
     val titles = listOf("Danh sách việc", "Thời khóa biểu", "Kế hoạch", "Phát sinh")
     val navItems = listOf(
         "Việc" to Icons.Default.Check,
@@ -89,6 +108,9 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
             TopAppBar(
                 title = { Text(titles[tab]) },
                 actions = {
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(Icons.Default.Settings, contentDescription = "Chạy nền & thông báo")
+                    }
                     IconButton(onClick = { showAbout = true }) {
                         Icon(Icons.Default.Info, contentDescription = "Giới thiệu")
                     }
@@ -123,6 +145,14 @@ fun AppRoot(vm: MainViewModel = viewModel()) {
     }
 
     if (showAbout) AboutDialog { showAbout = false }
+    if (showSettings) {
+        SettingsDialog(
+            resumeTick = resumeTick,
+            keepAlive = keepAlive,
+            onKeepAlive = { vm.setKeepAlive(it) },
+            onDismiss = { showSettings = false }
+        )
+    }
 }
 
 @Composable

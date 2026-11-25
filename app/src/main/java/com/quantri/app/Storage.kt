@@ -111,6 +111,16 @@ class Repository(context: Context) {
         return n
     }
 
+    fun keepAlive(): Boolean = prefs.getBoolean("keep_alive", true)
+    fun setKeepAlive(v: Boolean) {
+        prefs.edit().putBoolean("keep_alive", v).apply()
+    }
+
+    fun setupShown(): Boolean = prefs.getBoolean("setup_shown", false)
+    fun markSetupShown() {
+        prefs.edit().putBoolean("setup_shown", true).apply()
+    }
+
     fun lastFired(): Long = prefs.getLong("last_fired", 0L)
     fun setLastFired(v: Long) {
         prefs.edit().putLong("last_fired", v).apply()
