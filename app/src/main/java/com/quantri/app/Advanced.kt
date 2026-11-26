@@ -1,5 +1,8 @@
 package com.quantri.app
 
+import java.time.Instant
+import java.time.ZoneId
+
 /**
  * Cài đặt "Thông báo cao cấp": nhắc khi việc đang làm sắp kết thúc.
  *  remaining = false: nhắc khi đã qua `value` (% hoặc phút) thời gian của việc.
@@ -22,6 +25,48 @@ object Advanced {
         val amount = if (a.percent) total * a.value / 100 else a.value * 60_000L
         val offset = if (a.remaining) total - amount else amount
         return if (offset in 1 until total) offset else null
+    }
+
+    /**
+     * Tên việc sẽ làm SAU đoạn việc thứ `index` trong kế hoạch ngày `segs`:
+     * là việc khác tên đầu tiên đứng sau nó (bỏ qua các đoạn cùng việc nối liền nhau và việc đã bị xóa).
+     */
+    fun nextTitleAfter(segs: List<Segment>, index: Int, byId: Map<Int, Task>): String? {
+        val current = segs[index]
+        for (j in index + 1 until segs.size) {
+            val s = segs[j]
+            if (s.taskId == current.taskId) continue
+            val title = byId[s.taskId]?.title
+            if (title != null) return title
+        }
+        return null
+    }
+
+    /**
+     * Việc đang làm (hoặc việc sắp tới nếu lúc này đang trống) theo kế hoạch, kèm việc sẽ làm sau nó.
+     * Dùng cho phần xem trước và nút "Nghe thử" để luôn dùng tên việc thật, không dùng tên mẫu.
+     * Trả về null nếu kế hoạch (trong 60 ngày tới) chưa có việc nào.
+     */
+    fun currentAndNext(
+        tasks: List<Task>,
+        slots: List<Slot>,
+        adhoc: List<Adhoc>,
+        now: Long
+    ): Pair<String, String?>? {
+        val zone = ZoneId.systemDefault()
+        val byId = tasks.associateBy { it.id }
+        val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        for (i in 0..60) {
+            val date = today.plusDays(i.toLong())
+            val segs = Plan.forDate(date, slots, adhoc).filter { byId.containsKey(it.taskId) }
+            val dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli()
+            val idx = segs.indexOfFirst { dayStart + it.endMin * 60_000L > now }
+            if (idx >= 0) {
+                val current = byId.getValue(segs[idx].taskId).title
+                return current to nextTitleAfter(segs, idx, byId)
+            }
+        }
+        return null
     }
 
     /** Nội dung thông báo (cũng là câu được đọc thành tiếng). */

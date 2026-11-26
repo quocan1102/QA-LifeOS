@@ -37,9 +37,9 @@ class SpeakService : Service(), TextToSpeech.OnInitListener {
             )
         }.isSuccess
 
-        /** Nút "Nghe thử" trong màn hình cài đặt. */
-        fun test(ctx: Context, a: AdvSettings): Boolean =
-            start(ctx, "Sắp hết giờ · Làm việc", Advanced.message("Làm việc", a, "Nghỉ trưa"))
+        /** Nút "Nghe thử": dùng tên việc hiện tại và việc kế tiếp THẬT lấy từ kế hoạch. */
+        fun test(ctx: Context, a: AdvSettings, current: String, next: String?): Boolean =
+            start(ctx, "Sắp hết giờ · $current", Advanced.message(current, a, next))
     }
 
     private val handler = Handler(Looper.getMainLooper())

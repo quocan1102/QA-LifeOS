@@ -83,6 +83,10 @@ fun AppRoot(resumeTick: Int, vm: MainViewModel = viewModel()) {
     var showAbout by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     val keepAlive by vm.keepAlive.collectAsState()
+    // Tên việc đang làm và việc kế tiếp THẬT theo kế hoạch, dùng cho xem trước / nghe thử thông báo cao cấp
+    val sample = remember(tasks, slots, adhoc, resumeTick) {
+        Advanced.currentAndNext(tasks, slots, adhoc, System.currentTimeMillis())
+    }
 
     val permLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -158,6 +162,7 @@ fun AppRoot(resumeTick: Int, vm: MainViewModel = viewModel()) {
             onKeepAlive = { vm.setKeepAlive(it) },
             adv = adv,
             onAdv = { vm.setAdv(it) },
+            sample = sample,
             onDismiss = { showSettings = false }
         )
     }

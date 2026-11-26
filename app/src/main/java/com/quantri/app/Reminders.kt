@@ -72,7 +72,7 @@ object Reminders {
                 if (d.adv.enabled) {
                     val offset = Advanced.offsetMs(seg.endMin - seg.startMin, d.adv)
                     if (offset != null) {
-                        val next = segs.getOrNull(i + 1)?.let { byId[it.taskId]?.title }
+                        val next = Advanced.nextTitleAfter(segs, i, byId)
                         out += Event(
                             date, seg, t, EventKind.PROGRESS,
                             progressAt = start.startMillis + offset,

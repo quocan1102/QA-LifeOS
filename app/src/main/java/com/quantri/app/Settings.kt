@@ -66,7 +66,11 @@ fun StatusRow(title: String, ok: Boolean, actionLabel: String, onAction: () -> U
 
 /** Thông báo cao cấp: nhắc khi việc đang làm sắp kết thúc, đọc thành tiếng. */
 @Composable
-fun AdvancedSection(adv: AdvSettings, onAdv: (AdvSettings) -> Unit) {
+fun AdvancedSection(
+    adv: AdvSettings,
+    onAdv: (AdvSettings) -> Unit,
+    sample: Pair<String, String?>?          // (việc hiện tại, việc kế tiếp) THẬT theo kế hoạch
+) {
     val ctx = LocalContext.current
     var text by remember { mutableStateOf(adv.value.toString()) }
     var modeOpen by remember { mutableStateOf(false) }
@@ -153,11 +157,25 @@ fun AdvancedSection(adv: AdvSettings, onAdv: (AdvSettings) -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.Gray
             )
-            Text(
-                "Ví dụ nội dung: " + Advanced.message("Làm việc", adv, "Nghỉ trưa"),
-                style = MaterialTheme.typography.bodySmall
-            )
-            OutlinedButton(onClick = { SpeakService.test(ctx, adv) }) { Text("Nghe thử") }
+            if (sample != null) {
+                Text(
+                    "Nội dung sẽ đọc, theo kế hoạch hiện tại của bạn:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+                Text(Advanced.message(sample.first, adv, sample.second))
+                OutlinedButton(onClick = { SpeakService.test(ctx, adv, sample.first, sample.second) }) {
+                    Text("Nghe thử")
+                }
+            } else {
+                Text(
+                    "Chưa có việc nào trong kế hoạch nên chưa có tên việc thật để xem trước hoặc nghe thử. " +
+                        "Khi có, câu nói sẽ tự dùng tên việc đang làm và việc kế tiếp, theo mẫu: " +
+                        Advanced.message("[tên việc hiện tại]", adv, "[tên việc tiếp theo]"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
         }
     }
 }
@@ -170,6 +188,7 @@ fun SettingsDialog(
     onKeepAlive: (Boolean) -> Unit,
     adv: AdvSettings,
     onAdv: (AdvSettings) -> Unit,
+    sample: Pair<String, String?>?,
     onDismiss: () -> Unit
 ) {
     val ctx = LocalContext.current
@@ -200,7 +219,7 @@ fun SettingsDialog(
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                AdvancedSection(adv, onAdv)
+                AdvancedSection(adv, onAdv, sample)
 
                 HorizontalDivider()
 

@@ -1,7 +1,7 @@
 # QA LifeOS – Hệ điều hành cuộc sống (Android)
 
 Nhà phát triển: Quốc Ân
-Phiên bản: 2.0.1
+Phiên bản: 2.0.2
 
 Ứng dụng lập kế hoạch và nhắc việc hằng ngày (Kotlin + Jetpack Compose, minSdk 26).
 
