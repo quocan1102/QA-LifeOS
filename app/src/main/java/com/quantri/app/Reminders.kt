@@ -21,11 +21,27 @@ import java.time.ZoneId
 
 private const val ALARM_REQUEST = 1
 
-/** Một lần nhắc: đoạn việc `seg` của `task` bắt đầu vào ngày `date`. */
-data class Event(val date: LocalDate, val seg: Segment, val task: Task) {
-    val at: Long
+enum class EventKind {
+    START,      // đến giờ bắt đầu một việc trong kế hoạch
+    PROGRESS    // thông báo cao cấp: việc đang làm sắp kết thúc
+}
+
+/** Một lần nhắc: đoạn việc `seg` của `task` trong ngày `date`. */
+data class Event(
+    val date: LocalDate,
+    val seg: Segment,
+    val task: Task,
+    val kind: EventKind = EventKind.START,
+    val progressAt: Long = 0L,          // chỉ dùng khi kind == PROGRESS
+    val nextTitle: String? = null,
+    val spoken: String = ""             // nội dung đọc thành tiếng (PROGRESS)
+) {
+    val startMillis: Long
         get() = date.atTime(seg.startMin / 60, seg.startMin % 60)
             .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+    val at: Long
+        get() = if (kind == EventKind.PROGRESS) progressAt else startMillis
 }
 
 fun ringtoneTitle(ctx: Context, uriStr: String?): String {
@@ -46,18 +62,36 @@ object Reminders {
 
     private fun eventsOn(date: LocalDate, d: AppData): List<Event> {
         val byId = d.tasks.associateBy { it.id }
-        return Plan.forDate(date, d.slots, d.adhoc).mapNotNull { seg ->
+        val segs = Plan.forDate(date, d.slots, d.adhoc)
+        val out = mutableListOf<Event>()
+        segs.forEachIndexed { i, seg ->
             val t = byId[seg.taskId]
-            if (t != null && t.remind) Event(date, seg, t) else null
+            if (t != null && t.remind) {
+                val start = Event(date, seg, t)
+                out += start
+                if (d.adv.enabled) {
+                    val offset = Advanced.offsetMs(seg.endMin - seg.startMin, d.adv)
+                    if (offset != null) {
+                        val next = segs.getOrNull(i + 1)?.let { byId[it.taskId]?.title }
+                        out += Event(
+                            date, seg, t, EventKind.PROGRESS,
+                            progressAt = start.startMillis + offset,
+                            nextTitle = next,
+                            spoken = Advanced.message(t.title, d.adv, next)
+                        )
+                    }
+                }
+            }
         }
+        return out
     }
 
-    /** Lần nhắc kế tiếp (sau `after`), tìm trong vòng ~400 ngày. */
-    fun nextEvent(d: AppData, after: Long): Event? {
+    /** Lần nhắc kế tiếp (sau `after`), tìm trong vòng ~400 ngày. `kind` = null: lấy mọi loại. */
+    fun nextEvent(d: AppData, after: Long, kind: EventKind? = null): Event? {
         val start = Instant.ofEpochMilli(after).atZone(ZoneId.systemDefault()).toLocalDate()
         for (i in 0..400) {
             val e = eventsOn(start.plusDays(i.toLong()), d)
-                .filter { it.at > after }
+                .filter { it.at > after && (kind == null || it.kind == kind) }
                 .minByOrNull { it.at }
             if (e != null) return e
         }
@@ -104,7 +138,7 @@ object Reminders {
         }
     }
 
-    // ------------------------------------------------------------ kênh thông báo (âm thanh/rung nằm ở kênh)
+    // ------------------------------------------------------------ kênh thông báo dự phòng (có âm thanh theo từng việc)
 
     private fun channelId(t: Task): String = when (t.type) {
         ReminderType.NOTIFY -> "r_notify"
@@ -121,7 +155,7 @@ object Reminders {
         val pattern = patterns.getValue(t.vib)
         val channel = when (t.type) {
             ReminderType.NOTIFY -> NotificationChannel(
-                id, "Nhắc việc · chỉ thông báo", NotificationManager.IMPORTANCE_DEFAULT
+                id, "Nhắc việc · chỉ thông báo", NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 setSound(null, null)
                 enableVibration(false)
@@ -160,7 +194,7 @@ object Reminders {
         return id
     }
 
-    /** Tạo kênh cho các việc đang bật nhắc và xóa các kênh không còn ai dùng. */
+    /** Tạo kênh cho các việc đang bật nhắc và xóa các kênh "r_..." không còn ai dùng. */
     fun syncChannels(ctx: Context, tasks: List<Task>) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         val used = tasks.filter { it.remind }.map { ensureChannel(ctx, it) }.toSet()
@@ -169,7 +203,7 @@ object Reminders {
             .forEach { nm.deleteNotificationChannel(it.id) }
     }
 
-    // ------------------------------------------------------------ hiển thị thông báo
+    // ------------------------------------------------------------ thông báo thường (dự phòng)
 
     fun post(ctx: Context, t: Task, nid: Int, text: String) {
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -189,6 +223,7 @@ object Reminders {
             .setContentText(text)
             .setContentIntent(open)
             .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(if (loud) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(
                 if (t.type == ReminderType.ALARM) NotificationCompat.CATEGORY_ALARM
@@ -198,12 +233,13 @@ object Reminders {
         NotificationManagerCompat.from(ctx).notify(nid, n)
     }
 
-    /**
-     * Đến giờ nhắc:
-     *  - Chuông báo / Rung: kêu và rung liên tục như cuộc gọi đến cho tới khi bấm Tắt (AlarmService).
-     *  - Chỉ thông báo: hiện một thông báo yên lặng.
-     */
+    // ------------------------------------------------------------ xử lý khi đến giờ
+
     fun show(ctx: Context, e: Event) {
+        if (e.kind == EventKind.PROGRESS) {
+            announceProgress(ctx, e)
+            return
+        }
         val nid = ((e.date.toEpochDay() * 1440L + e.seg.startMin) * 31L + e.task.id).toInt()
         val text = fmtTime(e.seg.startMin) + " – " + fmtTime(e.seg.endMin) +
             " · " + fmtDuration(e.seg.endMin - e.seg.startMin) +
@@ -211,19 +247,22 @@ object Reminders {
         ring(ctx, e.task, nid, text)
     }
 
+    /**
+     * Đến giờ bắt đầu việc: hiện thông báo trên màn hình khóa, thanh trạng thái và cửa sổ nổi,
+     * kêu/rung theo kiểu nhắc của việc, tối đa 3 phút, nhắc lại sau mỗi 3 phút cho tới khi xác nhận.
+     */
     private fun ring(ctx: Context, t: Task, nid: Int, text: String) {
-        if (t.type == ReminderType.NOTIFY) {
-            post(ctx, t, nid, text)
-            return
-        }
         val info = RingInfo(nid, t.id, t.title, t.stars, text, t.type, t.ringtone, t.vib)
-        // Nếu hệ thống không cho khởi động dịch vụ kêu chuông thì dùng thông báo có âm thanh làm dự phòng.
+        // Nếu hệ thống không cho khởi động dịch vụ thì dùng thông báo thường làm dự phòng.
         if (!AlarmService.start(ctx, info)) post(ctx, t, nid, text)
     }
 
-    fun postMissed(ctx: Context, info: RingInfo) {
-        val t = Task(info.taskId, info.title, info.stars, true, ReminderType.NOTIFY)
-        post(ctx, t, info.key, "Bạn đã bỏ lỡ nhắc nhở · " + info.text)
+    /** Thông báo cao cấp: việc đang làm sắp kết thúc, đọc thành tiếng bằng giọng đọc của máy. */
+    private fun announceProgress(ctx: Context, e: Event) {
+        val title = "Sắp hết giờ · " + e.task.title
+        if (!SpeakService.start(ctx, title, e.spoken)) {
+            post(ctx, e.task, (e.progressAt / 1000L % 1_000_000L).toInt(), e.spoken)
+        }
     }
 
     /** Nút "Thử ngay" trong hộp thoại sửa việc. */

@@ -19,6 +19,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _adhoc = MutableStateFlow(repo.loadAdhoc())
     val adhoc: StateFlow<List<Adhoc>> = _adhoc.asStateFlow()
 
+    private val _adv = MutableStateFlow(repo.loadAdv())
+    val adv: StateFlow<AdvSettings> = _adv.asStateFlow()
+
     private val _keepAlive = MutableStateFlow(repo.keepAlive())
     val keepAlive: StateFlow<Boolean> = _keepAlive.asStateFlow()
 
@@ -32,13 +35,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         KeepAlive.apply(ctx)
     }
 
+    fun setAdv(a: AdvSettings) {
+        repo.saveAdv(a)
+        _adv.value = a
+        refresh()
+    }
+
     fun setupShown(): Boolean = repo.setupShown()
     fun markSetupShown() = repo.markSetupShown()
 
     /** Mỗi khi dữ liệu đổi: cập nhật kênh thông báo và đặt lại báo thức kế tiếp theo kế hoạch. */
     private fun refresh() {
         Reminders.syncChannels(ctx, _tasks.value)
-        Reminders.reschedule(ctx, AppData(_tasks.value, _slots.value, _adhoc.value))
+        Reminders.reschedule(ctx, AppData(_tasks.value, _slots.value, _adhoc.value, _adv.value))
         KeepAlive.apply(ctx)
     }
 

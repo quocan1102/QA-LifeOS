@@ -70,9 +70,11 @@ fun AppRoot(resumeTick: Int, vm: MainViewModel = viewModel()) {
     val tasks by vm.tasks.collectAsState()
     val slots by vm.slots.collectAsState()
     val adhoc by vm.adhoc.collectAsState()
+    val adv by vm.adv.collectAsState()
 
     var tab by rememberSaveable { mutableStateOf(0) }
     var planDay by rememberSaveable { mutableStateOf(LocalDate.now().toEpochDay()) }
+    var planView by rememberSaveable { mutableStateOf(0) }       // 0 = ngày, 1 = tuần, 2 = tháng
     var adhocDay by rememberSaveable { mutableStateOf(LocalDate.now().toEpochDay()) }
     var adhocMonth by rememberSaveable {
         mutableStateOf(LocalDate.now().withDayOfMonth(1).toEpochDay())
@@ -95,12 +97,12 @@ fun AppRoot(resumeTick: Int, vm: MainViewModel = viewModel()) {
         }
     }
 
-    val titles = listOf("Danh sách việc", "Thời khóa biểu", "Kế hoạch", "Phát sinh")
+    val titles = listOf("Kế hoạch", "Thời khóa biểu", "Phát sinh", "Danh sách việc")
     val navItems = listOf(
-        "Việc" to Icons.Default.Check,
-        "Thời khóa biểu" to Icons.Default.DateRange,
         "Kế hoạch" to Icons.Default.Home,
-        "Phát sinh" to Icons.Default.Warning
+        "Thời khóa biểu" to Icons.Default.DateRange,
+        "Phát sinh" to Icons.Default.Warning,
+        "Danh sách việc" to Icons.Default.Check
     )
 
     Scaffold(
@@ -109,7 +111,7 @@ fun AppRoot(resumeTick: Int, vm: MainViewModel = viewModel()) {
                 title = { Text(titles[tab]) },
                 actions = {
                     IconButton(onClick = { showSettings = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Chạy nền & thông báo")
+                        Icon(Icons.Default.Settings, contentDescription = "Cài đặt")
                     }
                     IconButton(onClick = { showAbout = true }) {
                         Icon(Icons.Default.Info, contentDescription = "Giới thiệu")
@@ -132,14 +134,18 @@ fun AppRoot(resumeTick: Int, vm: MainViewModel = viewModel()) {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (tab) {
-                0 -> TasksScreen(tasks, vm)
+                0 -> PlanScreen(
+                    tasks, slots, adhoc,
+                    dayEpoch = planDay, view = planView,
+                    onDay = { planDay = it }, onView = { planView = it }
+                )
                 1 -> TimetableScreen(tasks, slots, vm)
-                2 -> PlanScreen(tasks, slots, adhoc, planDay) { planDay = it }
-                else -> AdhocScreen(
+                2 -> AdhocScreen(
                     tasks, slots, adhoc, vm,
                     selectedEpoch = adhocDay, onSelect = { adhocDay = it },
                     monthEpoch = adhocMonth, onMonth = { adhocMonth = it }
                 )
+                else -> TasksScreen(tasks, vm)
             }
         }
     }
@@ -150,6 +156,8 @@ fun AppRoot(resumeTick: Int, vm: MainViewModel = viewModel()) {
             resumeTick = resumeTick,
             keepAlive = keepAlive,
             onKeepAlive = { vm.setKeepAlive(it) },
+            adv = adv,
+            onAdv = { vm.setAdv(it) },
             onDismiss = { showSettings = false }
         )
     }

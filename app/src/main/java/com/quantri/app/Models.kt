@@ -46,6 +46,7 @@ data class Adhoc(
 val DAY_LABELS = listOf("T2", "T3", "T4", "T5", "T6", "T7", "CN")
 val DAY_NAMES = listOf("Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật")
 val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy")
+val DAY_MONTH_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("dd/MM")
 
 fun dayTitle(date: LocalDate): String =
     DAY_NAMES[date.dayOfWeek.value - 1] + ", " + date.format(DATE_FMT)

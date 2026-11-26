@@ -37,7 +37,7 @@ object KeepAlive {
             nm.createNotificationChannel(channel)
         }
 
-        val next = Reminders.nextEvent(Repository(ctx).load(), System.currentTimeMillis())
+        val next = Reminders.nextEvent(Repository(ctx).load(), System.currentTimeMillis(), EventKind.START)
         val text = if (next == null) {
             "Chưa có việc nào cần nhắc"
         } else {

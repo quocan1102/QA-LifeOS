@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -52,10 +53,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/** Thông tin một lần báo đang kêu. */
+/** Thông tin một lần báo đang chờ xác nhận. */
 data class RingInfo(
     val key: Int,
     val taskId: Int,
@@ -95,26 +97,32 @@ data class RingInfo(
     }
 }
 
-/** Trạng thái chuông đang kêu, dùng chung giữa dịch vụ và màn hình báo thức (cùng một tiến trình). */
+/** Trạng thái "đang kêu", dùng chung giữa dịch vụ và màn hình báo thức (cùng một tiến trình). */
 object AlarmState {
     val active = MutableStateFlow<RingInfo?>(null)
 }
 
 /**
- * Kêu chuông + rung liên tục như cuộc gọi đến cho tới khi người dùng bấm Tắt
- * (hoặc Báo lại, hoặc hết thời gian tối đa).
+ * Nhắc việc đến giờ:
+ *  - Mỗi vòng kêu/rung tối đa 3 phút (RING_MS), hiện thông báo trên màn hình khóa, thanh trạng thái
+ *    và cửa sổ nổi phía trên mọi ứng dụng.
+ *  - Nếu chưa xác nhận "Đã làm", nghỉ 3 phút (GAP_MS) rồi nhắc lại, lặp lại cho tới khi xác nhận.
+ *  - Vòng kế tiếp được hẹn bằng AlarmManager nên vẫn chạy đúng giờ kể cả khi máy ngủ sâu.
  */
 class AlarmService : Service() {
     companion object {
         const val ACTION_START = "com.quantri.app.ALARM_START"
-        const val ACTION_DISMISS = "com.quantri.app.ALARM_DISMISS"
-        const val ACTION_SNOOZE = "com.quantri.app.ALARM_SNOOZE"
+        const val ACTION_MUTE = "com.quantri.app.ALARM_MUTE"
+        const val ACTION_DONE = "com.quantri.app.ALARM_DONE"
         private const val CHANNEL = "ring_alarm"
-        private const val NOTIFICATION_ID = 7002
-        private const val MAX_RING_MS = 10 * 60_000L
-        private const val SNOOZE_MIN = 5
+        private const val CHANNEL_WAIT = "ring_wait"
+        private const val FOREGROUND_ID = 7002
+        private const val WAIT_ID = 7004
+        private const val ROUND_REQUEST = 9001
+        const val RING_MS = 3 * 60_000L
+        const val GAP_MS = 3 * 60_000L
 
-        /** Bắt đầu kêu chuông. Trả về false nếu hệ thống không cho khởi động dịch vụ. */
+        /** Bắt đầu (hoặc thay thế) một lần nhắc. Trả về false nếu hệ thống không cho khởi động dịch vụ. */
         fun start(ctx: Context, info: RingInfo): Boolean = runCatching {
             ContextCompat.startForegroundService(
                 ctx,
@@ -122,87 +130,119 @@ class AlarmService : Service() {
             )
         }.isSuccess
 
-        fun scheduleSnooze(ctx: Context, info: RingInfo) {
+        /** Người dùng xác nhận đã làm: dừng kêu, hủy các vòng nhắc lại và xóa thông báo. */
+        fun confirm(ctx: Context) {
+            cancelRound(ctx)
+            NotificationManagerCompat.from(ctx).cancel(WAIT_ID)
+            ctx.stopService(Intent(ctx, AlarmService::class.java))
+            AlarmState.active.value = null
+        }
+
+        private fun roundIntent(ctx: Context, info: RingInfo?, flags: Int): PendingIntent? {
+            val intent = Intent(ctx, AlarmService::class.java).setAction(ACTION_START)
+            if (info != null) info.putInto(intent)
+            return PendingIntent.getForegroundService(ctx, ROUND_REQUEST, intent, flags)
+        }
+
+        private fun cancelRound(ctx: Context) {
+            val pi = roundIntent(ctx, null, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE)
+                ?: return
+            ctx.getSystemService(AlarmManager::class.java).cancel(pi)
+            pi.cancel()
+        }
+
+        /** Hẹn vòng kêu kế tiếp sau `delayMs`. */
+        private fun scheduleRound(ctx: Context, info: RingInfo, delayMs: Long) {
             val am = ctx.getSystemService(AlarmManager::class.java)
-            val intent = info.putInto(Intent(ctx, AlarmService::class.java).setAction(ACTION_START))
-            val pi = PendingIntent.getForegroundService(
-                ctx, 10_000 + info.taskId, intent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            val at = System.currentTimeMillis() + SNOOZE_MIN * 60_000L
+            val pi = roundIntent(
+                ctx, info, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            ) ?: return
+            val at = System.currentTimeMillis() + delayMs
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
                 am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
             } else {
                 am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
             }
         }
-
-        fun snoozeMinutes() = SNOOZE_MIN
     }
 
     private val handler = Handler(Looper.getMainLooper())
     private var player: MediaPlayer? = null
     private var vibrator: Vibrator? = null
     private var focusRequest: AudioFocusRequest? = null
+    private var wakeLock: PowerManager.WakeLock? = null
     private var current: RingInfo? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_DISMISS -> stopRinging()
-            ACTION_SNOOZE -> {
-                current?.let { scheduleSnooze(this, it) }
-                stopRinging()
-            }
+            ACTION_MUTE -> if (current != null) endRound() else stopSelf()
             else -> {
                 val info = RingInfo.from(intent) ?: current
                 if (info == null) {
                     // Phải gọi startForeground trước khi dừng, nếu không hệ thống sẽ báo lỗi.
-                    ensureChannel()
+                    ensureChannels()
                     enterForeground(
                         NotificationCompat.Builder(this, CHANNEL)
                             .setSmallIcon(R.drawable.ic_notification)
                             .setContentTitle("QA LifeOS")
                             .build()
                     )
-                    stopRinging()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
                 } else {
-                    startRinging(info)
+                    startRound(info)
                 }
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun startRinging(info: RingInfo) {
-        val alreadyRinging = current != null
+    // ------------------------------------------------------------ vòng kêu / vòng nghỉ
+
+    private fun startRound(info: RingInfo) {
+        releaseSound()
+        handler.removeCallbacksAndMessages(null)
         current = info
         AlarmState.active.value = info
-        ensureChannel()
-        enterForeground(buildNotification(info))
-        if (!alreadyRinging) {
-            startSound(info)
-            startVibration(info)
+        NotificationManagerCompat.from(this).cancel(WAIT_ID)
+
+        ensureChannels()
+        enterForeground(buildRingingNotification(info))
+        acquireWakeLock()
+        if (info.type == ReminderType.ALARM) startSound(info)
+        if (info.type != ReminderType.NOTIFY) startVibration(info)
+
+        handler.postDelayed({ endRound() }, RING_MS)
+        // Hẹn sẵn vòng sau: nếu dịch vụ bị hệ thống dọn thì báo thức vẫn đánh thức lại.
+        scheduleRound(this, info, RING_MS + GAP_MS)
+    }
+
+    /** Hết 3 phút (hoặc bấm "Tắt tiếng"): nghỉ 3 phút, thông báo vẫn nằm đó chờ xác nhận. */
+    private fun endRound() {
+        val info = current ?: run {
+            stopSelf()
+            return
         }
         handler.removeCallbacksAndMessages(null)
-        handler.postDelayed({ timeout() }, MAX_RING_MS)
-    }
-
-    private fun timeout() {
-        current?.let { Reminders.postMissed(this, it) }
-        stopRinging()
-    }
-
-    private fun stopRinging() {
-        releaseResources()
+        releaseSound()
         AlarmState.active.value = null
+        scheduleRound(this, info, GAP_MS)
+        NotificationManagerCompat.from(this).notify(WAIT_ID, buildWaitNotification(info))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private fun releaseResources() {
+    override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        releaseSound()
+        AlarmState.active.value = null
+        current = null
+        super.onDestroy()
+    }
+
+    private fun releaseSound() {
         player?.let {
             runCatching { it.stop() }
             it.release()
@@ -212,12 +252,14 @@ class AlarmService : Service() {
         vibrator = null
         focusRequest?.let { getSystemService(AudioManager::class.java).abandonAudioFocusRequest(it) }
         focusRequest = null
-        current = null
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
     }
 
-    override fun onDestroy() {
-        releaseResources()
-        super.onDestroy()
+    private fun acquireWakeLock() {
+        wakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "qalifeos:ring")
+            .apply { acquire(RING_MS + 10_000L) }
     }
 
     // ------------------------------------------------------------ âm thanh và rung
@@ -228,8 +270,6 @@ class AlarmService : Service() {
         .build()
 
     private fun startSound(info: RingInfo) {
-        if (info.type != ReminderType.ALARM) return
-
         val am = getSystemService(AudioManager::class.java)
         focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             .setAudioAttributes(alarmAttrs())
@@ -277,20 +317,33 @@ class AlarmService : Service() {
         runCatching { v.vibrate(VibrationEffect.createWaveform(pattern, 0), alarmAttrs()) }
     }
 
-    // ------------------------------------------------------------ thông báo toàn màn hình
+    // ------------------------------------------------------------ thông báo
 
-    private fun ensureChannel() {
+    private fun ensureChannels() {
         val nm = getSystemService(NotificationManager::class.java)
-        if (nm.getNotificationChannel(CHANNEL) != null) return
-        val c = NotificationChannel(CHANNEL, "Báo thức nhắc việc", NotificationManager.IMPORTANCE_HIGH)
-        c.description = "Màn hình báo thức khi đến giờ làm việc"
-        c.setSound(null, null)          // âm thanh do dịch vụ tự phát để kêu lặp lại
-        c.enableVibration(false)        // rung do dịch vụ tự điều khiển
-        c.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-        nm.createNotificationChannel(c)
+        if (nm.getNotificationChannel(CHANNEL) == null) {
+            val c = NotificationChannel(CHANNEL, "Nhắc việc đến giờ", NotificationManager.IMPORTANCE_HIGH)
+            c.description = "Thông báo và cửa sổ nhắc khi đến giờ làm việc"
+            c.setSound(null, null)          // âm thanh do dịch vụ tự phát để kêu lặp lại
+            c.enableVibration(false)        // rung do dịch vụ tự điều khiển
+            c.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            nm.createNotificationChannel(c)
+        }
+        if (nm.getNotificationChannel(CHANNEL_WAIT) == null) {
+            val c = NotificationChannel(CHANNEL_WAIT, "Chờ xác nhận", NotificationManager.IMPORTANCE_LOW)
+            c.description = "Nhắc việc chưa xác nhận, sẽ nhắc lại sau 3 phút"
+            c.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            nm.createNotificationChannel(c)
+        }
     }
 
-    private fun buildNotification(info: RingInfo): Notification {
+    private fun doneIntent(): PendingIntent = PendingIntent.getBroadcast(
+        this, 6,
+        Intent(this, AlarmActionReceiver::class.java).setAction(ACTION_DONE),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+
+    private fun buildRingingNotification(info: RingInfo): Notification {
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         val screen = PendingIntent.getActivity(
             this, 3,
@@ -298,40 +351,69 @@ class AlarmService : Service() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             flags
         )
-        val dismiss = PendingIntent.getService(
-            this, 4, Intent(this, AlarmService::class.java).setAction(ACTION_DISMISS), flags
+        val mute = PendingIntent.getService(
+            this, 5, Intent(this, AlarmService::class.java).setAction(ACTION_MUTE), flags
         )
-        val snooze = PendingIntent.getService(
-            this, 5, Intent(this, AlarmService::class.java).setAction(ACTION_SNOOZE), flags
-        )
-        return NotificationCompat.Builder(this, CHANNEL)
+        val b = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(info.title + "  " + "★".repeat(info.stars))
             .setContentText(info.text)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(info.text))
+            .setCategory(
+                if (info.type == ReminderType.NOTIFY) NotificationCompat.CATEGORY_REMINDER
+                else NotificationCompat.CATEGORY_ALARM
+            )
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
             .setAutoCancel(false)
+            .setOnlyAlertOnce(false)
             .setContentIntent(screen)
-            .setFullScreenIntent(screen, true)
-            .addAction(0, "Tắt", dismiss)
-            .addAction(0, "Báo lại $SNOOZE_MIN phút", snooze)
+            .addAction(0, "Đã làm", doneIntent())
+        if (info.type != ReminderType.NOTIFY) {
+            // Màn hình báo thức đầy đủ trên màn hình khóa; khi đang dùng máy sẽ hiện dạng cửa sổ nổi.
+            b.setFullScreenIntent(screen, true)
+            b.addAction(0, "Tắt tiếng", mute)
+        }
+        return b.build()
+    }
+
+    private fun buildWaitNotification(info: RingInfo): Notification {
+        val open = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        return NotificationCompat.Builder(this, CHANNEL_WAIT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(info.title + "  " + "★".repeat(info.stars))
+            .setContentText("Chưa xác nhận · sẽ nhắc lại sau 3 phút")
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .setContentIntent(open)
+            .addAction(0, "Đã làm", doneIntent())
             .build()
     }
 
     private fun enterForeground(n: Notification) {
         runCatching {
             if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                startForeground(FOREGROUND_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             } else {
-                startForeground(NOTIFICATION_ID, n)
+                startForeground(FOREGROUND_ID, n)
             }
         }
     }
 }
 
-/** Màn hình báo thức hiện lên trên màn hình khóa, tự bật sáng màn hình. */
+/** Nhận nút "Đã làm" bấm từ thông báo. */
+class AlarmActionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        AlarmService.confirm(context)
+    }
+}
+
+/** Màn hình báo thức hiện trên màn hình khóa, tự bật sáng màn hình. */
 class AlarmActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -350,23 +432,21 @@ class AlarmActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 AlarmScreen(
-                    onDismiss = { sendToService(AlarmService.ACTION_DISMISS) },
-                    onSnooze = { sendToService(AlarmService.ACTION_SNOOZE) },
+                    onDone = { AlarmService.confirm(this) },
+                    onMute = {
+                        startService(Intent(this, AlarmService::class.java).setAction(AlarmService.ACTION_MUTE))
+                    },
                     onGone = { finish() }
                 )
             }
         }
     }
-
-    private fun sendToService(action: String) {
-        startService(Intent(this, AlarmService::class.java).setAction(action))
-    }
 }
 
 @Composable
-fun AlarmScreen(onDismiss: () -> Unit, onSnooze: () -> Unit, onGone: () -> Unit) {
+fun AlarmScreen(onDone: () -> Unit, onMute: () -> Unit, onGone: () -> Unit) {
     val info by AlarmState.active.collectAsState()
-    // Khi chuông đã tắt (từ thông báo, hết giờ...) thì đóng màn hình này
+    // Khi chuông đã tắt (xác nhận, tắt tiếng, nghỉ giữa các vòng...) thì đóng màn hình này
     LaunchedEffect(info) { if (info == null) onGone() }
     val i = info ?: return
 
@@ -399,16 +479,14 @@ fun AlarmScreen(onDismiss: () -> Unit, onSnooze: () -> Unit, onGone: () -> Unit)
             modifier = Modifier.padding(bottom = 32.dp)
         ) {
             Button(
-                onClick = onDismiss,
+                onClick = onDone,
                 modifier = Modifier.fillMaxWidth().height(64.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935))
-            ) { Text("TẮT", fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+            ) { Text("ĐÃ LÀM · XÁC NHẬN", fontSize = 20.sp, fontWeight = FontWeight.Bold) }
             OutlinedButton(
-                onClick = onSnooze,
+                onClick = onMute,
                 modifier = Modifier.fillMaxWidth().height(52.dp)
-            ) {
-                Text("Báo lại ${AlarmService.snoozeMinutes()} phút", color = Color.White)
-            }
+            ) { Text("Tắt tiếng (nhắc lại sau 3 phút)", color = Color.White) }
         }
     }
 }

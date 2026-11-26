@@ -4,13 +4,18 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class AppData(val tasks: List<Task>, val slots: List<Slot>, val adhoc: List<Adhoc>)
+data class AppData(
+    val tasks: List<Task>,
+    val slots: List<Slot>,
+    val adhoc: List<Adhoc>,
+    val adv: AdvSettings = AdvSettings()
+)
 
 class Repository(context: Context) {
     private val prefs =
         context.applicationContext.getSharedPreferences("quantri", Context.MODE_PRIVATE)
 
-    fun load() = AppData(loadTasks(), loadSlots(), loadAdhoc())
+    fun load() = AppData(loadTasks(), loadSlots(), loadAdhoc(), loadAdv())
 
     fun loadTasks(): List<Task> {
         val arr = JSONArray(prefs.getString("tasks", "[]"))
@@ -109,6 +114,22 @@ class Repository(context: Context) {
         val n = prefs.getInt("next_id", 1)
         prefs.edit().putInt("next_id", n + 1).apply()
         return n
+    }
+
+    fun loadAdv(): AdvSettings = AdvSettings(
+        enabled = prefs.getBoolean("adv_enabled", true),
+        remaining = prefs.getBoolean("adv_remaining", false),
+        value = prefs.getInt("adv_value", 90),
+        percent = prefs.getBoolean("adv_percent", true)
+    )
+
+    fun saveAdv(a: AdvSettings) {
+        prefs.edit()
+            .putBoolean("adv_enabled", a.enabled)
+            .putBoolean("adv_remaining", a.remaining)
+            .putInt("adv_value", a.value)
+            .putBoolean("adv_percent", a.percent)
+            .apply()
     }
 
     fun keepAlive(): Boolean = prefs.getBoolean("keep_alive", true)

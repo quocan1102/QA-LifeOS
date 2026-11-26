@@ -349,7 +349,109 @@ fun SlotDialog(
     )
 }
 
-// =============================================================== Kế hoạch (theo ngày)
+// =============================================================== Lịch tháng (dùng chung: Kế hoạch và Phát sinh)
+
+val LunarBlue = Color(0xFF0B4F8F)      // xanh biển đậm
+val LunarRed = Color(0xFFD32F2F)
+
+@Composable
+fun DayCell(
+    day: Int,
+    lunarText: String,
+    lunarRed: Boolean,
+    selected: Boolean,
+    isToday: Boolean,
+    count: Int,
+    modifier: Modifier,
+    onClick: () -> Unit
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    val shape = RoundedCornerShape(8.dp)
+    val lunarColor = when {
+        selected && lunarRed -> Color(0xFFFFCDD2)
+        selected -> Color.White
+        lunarRed -> LunarRed
+        else -> LunarBlue
+    }
+    Box(
+        modifier
+            .height(58.dp)
+            .padding(2.dp)
+            .background(if (selected) primary else Color.Transparent, shape)
+            .then(if (isToday && !selected) Modifier.border(1.dp, primary, shape) else Modifier)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(day.toString(), color = if (selected) Color.White else Color.Unspecified)
+            // Âm lịch: chữ nhỏ; mùng 1 và ngày cuối tháng âm màu đỏ
+            Text(
+                lunarText,
+                fontSize = 9.sp,
+                color = lunarColor,
+                fontWeight = if (lunarRed) FontWeight.Bold else FontWeight.Normal
+            )
+            Text(
+                if (count > 0) "●" + (if (count > 1) count.toString() else "") else " ",
+                fontSize = 8.sp,
+                color = if (selected) Color.White else primary
+            )
+        }
+    }
+}
+
+/** Lưới lịch một tháng (tuần bắt đầu từ thứ 2), mỗi ô ghi cả dương lịch và âm lịch. */
+@Composable
+fun MonthGrid(
+    first: LocalDate,                 // ngày 1 dương lịch của tháng
+    selectedEpoch: Long,
+    counts: Map<Long, Int>,
+    onSelect: (Long) -> Unit
+) {
+    val offset = first.dayOfWeek.value - 1
+    val total = YearMonth.from(first).lengthOfMonth()
+    val rows = (offset + total + 6) / 7
+    val today = LocalDate.now()
+
+    Column {
+        Row(Modifier.fillMaxWidth()) {
+            DAY_LABELS.forEach { label ->
+                Text(
+                    label,
+                    Modifier.weight(1f),
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+        for (r in 0 until rows) {
+            Row(Modifier.fillMaxWidth()) {
+                for (c in 0 until 7) {
+                    val dayNum = r * 7 + c - offset + 1
+                    if (dayNum < 1 || dayNum > total) {
+                        Box(Modifier.weight(1f).height(58.dp))
+                    } else {
+                        val date = first.plusDays((dayNum - 1).toLong())
+                        val ep = date.toEpochDay()
+                        DayCell(
+                            day = dayNum,
+                            lunarText = Lunar.cellLabel(date),
+                            lunarRed = Lunar.isHighlight(date),
+                            selected = ep == selectedEpoch,
+                            isToday = date == today,
+                            count = counts[ep] ?: 0,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onSelect(ep) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =============================================================== Kế hoạch (xem theo ngày / tuần / tháng)
 
 @Composable
 fun PlanScreen(
@@ -357,67 +459,219 @@ fun PlanScreen(
     slots: List<Slot>,
     adhoc: List<Adhoc>,
     dayEpoch: Long,
-    onDay: (Long) -> Unit
+    view: Int,                         // 0 = ngày, 1 = tuần, 2 = tháng
+    onDay: (Long) -> Unit,
+    onView: (Int) -> Unit
 ) {
     val date = LocalDate.ofEpochDay(dayEpoch)
-    val today = LocalDate.now()
-    val byId = tasks.associateBy { it.id }
-    val segs = Plan.forDate(date, slots, adhoc)
 
     Column(Modifier.fillMaxSize()) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            TextButton(onClick = { onDay(dayEpoch - 1) }) { Text("‹", fontSize = 26.sp) }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(dayTitle(date), fontWeight = FontWeight.Bold)
-                if (date == today) {
-                    Text(
-                        "Hôm nay",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                } else {
-                    TextButton(onClick = { onDay(today.toEpochDay()) }) { Text("Về hôm nay") }
-                }
+            listOf("Ngày", "Tuần", "Tháng").forEachIndexed { i, label ->
+                FilterChip(selected = view == i, onClick = { onView(i) }, label = { Text(label) })
             }
-            TextButton(onClick = { onDay(dayEpoch + 1) }) { Text("›", fontSize = 26.sp) }
         }
 
-        if (segs.isEmpty()) {
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                Text(
-                    "Ngày này chưa có việc nào.\nHãy xếp lịch ở Thời khóa biểu hoặc thêm ở Phát sinh.",
-                    modifier = Modifier.align(Alignment.Center).padding(32.dp),
-                    color = Color.Gray
-                )
+        PlanNav(view, date, onDay)
+
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when (view) {
+                0 -> PlanDay(tasks, slots, adhoc, date)
+                1 -> PlanWeek(tasks, slots, adhoc, date) { d -> onDay(d.toEpochDay()); onView(0) }
+                else -> PlanMonth(slots, adhoc, date) { d -> onDay(d.toEpochDay()); onView(0) }
             }
-        } else {
-            LazyColumn(
-                Modifier.weight(1f),
-                contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                var maxEnd = -1
-                segs.forEach { s ->
-                    if (maxEnd >= 0 && s.startMin > maxEnd) {
-                        val from = maxEnd
-                        item {
-                            Text(
-                                "Trống " + fmtTime(from) + " – " + fmtTime(s.startMin) +
-                                    " (" + fmtDuration(s.startMin - from) + ")",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.Gray,
-                                modifier = Modifier.padding(start = 4.dp)
-                            )
+        }
+    }
+}
+
+/** Thanh điều hướng: lùi / tiến theo ngày, tuần hoặc tháng; ghi cả dương lịch và âm lịch. */
+@Composable
+fun PlanNav(view: Int, date: LocalDate, onDay: (Long) -> Unit) {
+    val today = LocalDate.now()
+    val monday = date.minusDays((date.dayOfWeek.value - 1).toLong())
+    val sunday = monday.plusDays(6)
+
+    val title: String
+    val sub: String
+    val hasToday: Boolean
+    when (view) {
+        0 -> {
+            title = dayTitle(date)
+            sub = "Âm lịch: " + Lunar.full(date)
+            hasToday = date == today
+        }
+        1 -> {
+            title = "Tuần " + monday.format(DAY_MONTH_FMT) + " – " + sunday.format(DATE_FMT)
+            sub = "Âm lịch: " + Lunar.text(monday) + " – " + Lunar.text(sunday)
+            hasToday = !today.isBefore(monday) && !today.isAfter(sunday)
+        }
+        else -> {
+            val first = date.withDayOfMonth(1)
+            val last = first.plusDays((first.lengthOfMonth() - 1).toLong())
+            title = "Tháng " + date.monthValue + "/" + date.year
+            sub = "Âm lịch: " + Lunar.text(first) + " – " + Lunar.text(last) +
+                " · năm " + Lunar.canChi(Lunar.of(first).year)
+            hasToday = YearMonth.from(today) == YearMonth.from(date)
+        }
+    }
+
+    fun step(dir: Long): LocalDate = when (view) {
+        0 -> date.plusDays(dir)
+        1 -> date.plusWeeks(dir)
+        else -> date.plusMonths(dir)
+    }
+
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = { onDay(step(-1).toEpochDay()) }) { Text("‹", fontSize = 26.sp) }
+        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(title, fontWeight = FontWeight.Bold)
+            Text(sub, style = MaterialTheme.typography.bodySmall, color = LunarBlue)
+            if (hasToday) {
+                Text(
+                    "Hôm nay",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                TextButton(onClick = { onDay(today.toEpochDay()) }) { Text("Về hôm nay") }
+            }
+        }
+        TextButton(onClick = { onDay(step(1).toEpochDay()) }) { Text("›", fontSize = 26.sp) }
+    }
+}
+
+@Composable
+fun PlanDay(tasks: List<Task>, slots: List<Slot>, adhoc: List<Adhoc>, date: LocalDate) {
+    val byId = tasks.associateBy { it.id }
+    val segs = Plan.forDate(date, slots, adhoc)
+
+    if (segs.isEmpty()) {
+        Box(Modifier.fillMaxSize()) {
+            Text(
+                "Ngày này chưa có việc nào.\nHãy xếp lịch ở Thời khóa biểu hoặc thêm ở Phát sinh.",
+                modifier = Modifier.align(Alignment.Center).padding(32.dp),
+                color = Color.Gray
+            )
+        }
+        return
+    }
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        var maxEnd = -1
+        segs.forEach { s ->
+            if (maxEnd >= 0 && s.startMin > maxEnd) {
+                val from = maxEnd
+                item {
+                    Text(
+                        "Trống " + fmtTime(from) + " – " + fmtTime(s.startMin) +
+                            " (" + fmtDuration(s.startMin - from) + ")",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                }
+            }
+            maxEnd = maxOf(maxEnd, s.endMin)
+            item { SegmentCard(s, byId[s.taskId]) }
+        }
+    }
+}
+
+@Composable
+fun PlanWeek(
+    tasks: List<Task>,
+    slots: List<Slot>,
+    adhoc: List<Adhoc>,
+    anchor: LocalDate,
+    onPickDay: (LocalDate) -> Unit
+) {
+    val monday = anchor.minusDays((anchor.dayOfWeek.value - 1).toLong())
+    val byId = tasks.associateBy { it.id }
+    val today = LocalDate.now()
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(7) { i ->
+            val date = monday.plusDays(i.toLong())
+            val segs = Plan.forDate(date, slots, adhoc)
+            Card(Modifier.fillMaxWidth().clickable { onPickDay(date) }) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            DAY_NAMES[i] + ", " + date.format(DAY_MONTH_FMT),
+                            fontWeight = FontWeight.Bold,
+                            color = if (date == today) MaterialTheme.colorScheme.primary else Color.Unspecified
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "Âm " + Lunar.text(date),
+                            fontSize = 12.sp,
+                            color = if (Lunar.isHighlight(date)) LunarRed else LunarBlue,
+                            fontWeight = if (Lunar.isHighlight(date)) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                    if (segs.isEmpty()) {
+                        Text("Chưa có việc", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        segs.forEach { s ->
+                            Row {
+                                Text(
+                                    fmtTime(s.startMin) + "–" + fmtTime(s.endMin),
+                                    Modifier.width(104.dp),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    (byId[s.taskId]?.title ?: "(đã xóa)") +
+                                        if (s.source == Source.ADHOC) " · phát sinh" else "",
+                                    fontSize = 13.sp
+                                )
+                            }
                         }
                     }
-                    maxEnd = maxOf(maxEnd, s.endMin)
-                    item { SegmentCard(s, byId[s.taskId]) }
                 }
             }
         }
+    }
+}
+
+@Composable
+fun PlanMonth(
+    slots: List<Slot>,
+    adhoc: List<Adhoc>,
+    anchor: LocalDate,
+    onPickDay: (LocalDate) -> Unit
+) {
+    val first = anchor.withDayOfMonth(1)
+    val counts = remember(slots, adhoc, first) {
+        (0 until first.lengthOfMonth()).associate { d ->
+            val date = first.plusDays(d.toLong())
+            date.toEpochDay() to Plan.forDate(date, slots, adhoc).size
+        }
+    }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp)
+    ) {
+        MonthGrid(first, anchor.toEpochDay(), counts) { ep -> onPickDay(LocalDate.ofEpochDay(ep)) }
+        Text(
+            "Chấm tròn và số là số việc trong kế hoạch của ngày đó. Bấm vào một ngày để xem chi tiết.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.Gray,
+            modifier = Modifier.padding(top = 8.dp)
+        )
     }
 }
 
@@ -453,37 +707,6 @@ fun SegmentCard(s: Segment, t: Task?) {
 // =============================================================== Phát sinh (lịch tháng)
 
 @Composable
-fun DayCell(
-    day: Int,
-    selected: Boolean,
-    isToday: Boolean,
-    count: Int,
-    modifier: Modifier,
-    onClick: () -> Unit
-) {
-    val primary = MaterialTheme.colorScheme.primary
-    val shape = RoundedCornerShape(8.dp)
-    Box(
-        modifier
-            .height(46.dp)
-            .padding(2.dp)
-            .background(if (selected) primary else Color.Transparent, shape)
-            .then(if (isToday && !selected) Modifier.border(1.dp, primary, shape) else Modifier)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(day.toString(), color = if (selected) Color.White else Color.Unspecified)
-            Text(
-                if (count > 0) "●" else " ",
-                fontSize = 8.sp,
-                color = if (selected) Color.White else primary
-            )
-        }
-    }
-}
-
-@Composable
 fun AdhocScreen(
     tasks: List<Task>,
     slots: List<Slot>,
@@ -495,10 +718,7 @@ fun AdhocScreen(
     onMonth: (Long) -> Unit
 ) {
     val first = LocalDate.ofEpochDay(monthEpoch)
-    val offset = first.dayOfWeek.value - 1
-    val total = YearMonth.from(first).lengthOfMonth()
-    val rows = (offset + total + 6) / 7
-    val today = LocalDate.now()
+    val last = first.plusDays((first.lengthOfMonth() - 1).toLong())
     val counts = adhoc.groupingBy { it.date }.eachCount()
     val taskById = tasks.associateBy { it.id }
     val selectedDate = LocalDate.ofEpochDay(selectedEpoch)
@@ -516,55 +736,25 @@ fun AdhocScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { onMonth(first.minusYears(1).toEpochDay()) }) { Text("«", fontSize = 22.sp) }
                     TextButton(onClick = { onMonth(first.minusMonths(1).toEpochDay()) }) { Text("‹", fontSize = 22.sp) }
-                    Text(
-                        "Tháng " + first.monthValue + "/" + first.year,
-                        Modifier.weight(1f),
-                        fontWeight = FontWeight.Bold,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "Tháng " + first.monthValue + "/" + first.year,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "Âm lịch: " + Lunar.text(first) + " – " + Lunar.text(last),
+                            fontSize = 11.sp,
+                            color = LunarBlue
+                        )
+                    }
                     TextButton(onClick = { onMonth(first.plusMonths(1).toEpochDay()) }) { Text("›", fontSize = 22.sp) }
                     TextButton(onClick = { onMonth(first.plusYears(1).toEpochDay()) }) { Text("»", fontSize = 22.sp) }
                 }
             }
-            item {
-                Column {
-                    Row(Modifier.fillMaxWidth()) {
-                        DAY_LABELS.forEach { label ->
-                            Text(
-                                label,
-                                Modifier.weight(1f),
-                                color = Color.Gray,
-                                fontSize = 12.sp,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                            )
-                        }
-                    }
-                    for (r in 0 until rows) {
-                        Row(Modifier.fillMaxWidth()) {
-                            for (c in 0 until 7) {
-                                val dayNum = r * 7 + c - offset + 1
-                                if (dayNum < 1 || dayNum > total) {
-                                    Box(Modifier.weight(1f).height(46.dp))
-                                } else {
-                                    val date = first.plusDays((dayNum - 1).toLong())
-                                    val ep = date.toEpochDay()
-                                    DayCell(
-                                        day = dayNum,
-                                        selected = ep == selectedEpoch,
-                                        isToday = date == today,
-                                        count = counts[ep] ?: 0,
-                                        modifier = Modifier.weight(1f),
-                                        onClick = { onSelect(ep) }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            item { MonthGrid(first, selectedEpoch, counts, onSelect) }
             item {
                 Text(
-                    "Việc phát sinh · " + dayTitle(selectedDate),
+                    "Việc phát sinh · " + dayTitle(selectedDate) + " · Âm lịch " + Lunar.text(selectedDate),
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(top = 8.dp)
                 )
