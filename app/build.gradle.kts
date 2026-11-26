@@ -13,7 +13,7 @@ android {
         minSdk = 26
         targetSdk = 34
         // Số phiên bản hiển thị. Đổi số này khi phát hành bản mới (trùng với tên file zip: QA LifeOS Vx.y.z).
-        versionName = "1.1.0"
+        versionName = "1.2.0"
         // Số bản dựng: mỗi lần GitHub build lại tăng lên, nên APK mới luôn cài đè được lên bản cũ.
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
     }

@@ -424,7 +424,9 @@ fun TaskDialog(
                     }) { Text("Thử ngay") }
 
                     Text(
-                        "Nhắc theo Kế hoạch trong ngày: vào giờ bắt đầu của việc này (từ Thời khóa biểu hoặc Phát sinh).",
+                        "Nhắc theo Kế hoạch trong ngày, vào giờ bắt đầu của việc này (từ Thời khóa biểu hoặc Phát sinh). " +
+                            "Chuông báo và Rung sẽ kêu/rung liên tục như cuộc gọi đến cho tới khi bạn bấm Tắt " +
+                            "(tối đa 10 phút), kể cả khi tắt màn hình hoặc chưa mở app.",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray
                     )

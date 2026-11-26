@@ -1,7 +1,7 @@
 # QA LifeOS – Hệ điều hành cuộc sống (Android)
 
 Nhà phát triển: Quốc Ân
-Phiên bản: 1.1.0
+Phiên bản: 1.2.0
 
 Ứng dụng lập kế hoạch và nhắc việc hằng ngày (Kotlin + Jetpack Compose, minSdk 26).
 
@@ -20,3 +20,4 @@ Mở thư mục này, đợi Gradle đồng bộ, chọn *Build > Build APK(s)*.
 - Kế hoạch ngày = Thời khóa biểu + Phát sinh (Phát sinh được ưu tiên). Nhắc nhở báo vào giờ bắt đầu của từng đoạn việc trong Kế hoạch.
 - Nếu điện thoại có chế độ tiết kiệm pin mạnh (Xiaomi, Oppo, Samsung...), hãy tắt tối ưu pin cho app để báo đúng giờ.
 - Chạy nền: app dùng báo thức chính xác + dịch vụ chạy nền (thông báo thường trực nhỏ). Bấm biểu tượng bánh răng ở góc phải trên để kiểm tra và bật các quyền (thông báo, báo thức chính xác, không tối ưu pin).
+- Đến giờ nhắc, việc đặt "Chuông báo" hoặc "Rung" sẽ kêu/rung liên tục như cuộc gọi đến, bật sáng màn hình khóa với nút Tắt / Báo lại 5 phút, cho tới khi bạn tắt (tối đa 10 phút).

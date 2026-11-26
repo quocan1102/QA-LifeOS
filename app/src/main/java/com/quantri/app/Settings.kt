@@ -2,6 +2,7 @@ package com.quantri.app
 
 import android.app.AlarmManager
 import android.content.Context
+import android.app.NotificationManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -71,6 +72,11 @@ fun SettingsDialog(
             ctx.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
         } else true
     }
+    val fullScreenOk = remember(resumeTick) {
+        if (Build.VERSION.SDK_INT >= 34) {
+            ctx.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+        } else true
+    }
     val batteryOk = remember(resumeTick) {
         ctx.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(pkg)
     }
@@ -116,6 +122,13 @@ fun SettingsDialog(
                     openSettings(
                         ctx,
                         Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, pkgUri),
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri)
+                    )
+                }
+                StatusRow("Hiện màn hình báo thức khi khóa máy", fullScreenOk, "Cấp quyền") {
+                    openSettings(
+                        ctx,
+                        Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, pkgUri),
                         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri)
                     )
                 }

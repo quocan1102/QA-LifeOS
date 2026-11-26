@@ -171,7 +171,7 @@ object Reminders {
 
     // ------------------------------------------------------------ hiển thị thông báo
 
-    private fun post(ctx: Context, t: Task, nid: Int, text: String) {
+    fun post(ctx: Context, t: Task, nid: Int, text: String) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
@@ -198,16 +198,36 @@ object Reminders {
         NotificationManagerCompat.from(ctx).notify(nid, n)
     }
 
+    /**
+     * Đến giờ nhắc:
+     *  - Chuông báo / Rung: kêu và rung liên tục như cuộc gọi đến cho tới khi bấm Tắt (AlarmService).
+     *  - Chỉ thông báo: hiện một thông báo yên lặng.
+     */
     fun show(ctx: Context, e: Event) {
         val nid = ((e.date.toEpochDay() * 1440L + e.seg.startMin) * 31L + e.task.id).toInt()
         val text = fmtTime(e.seg.startMin) + " – " + fmtTime(e.seg.endMin) +
             " · " + fmtDuration(e.seg.endMin - e.seg.startMin) +
             if (e.seg.source == Source.ADHOC) " · Phát sinh" else ""
-        post(ctx, e.task, nid, text)
+        ring(ctx, e.task, nid, text)
+    }
+
+    private fun ring(ctx: Context, t: Task, nid: Int, text: String) {
+        if (t.type == ReminderType.NOTIFY) {
+            post(ctx, t, nid, text)
+            return
+        }
+        val info = RingInfo(nid, t.id, t.title, t.stars, text, t.type, t.ringtone, t.vib)
+        // Nếu hệ thống không cho khởi động dịch vụ kêu chuông thì dùng thông báo có âm thanh làm dự phòng.
+        if (!AlarmService.start(ctx, info)) post(ctx, t, nid, text)
+    }
+
+    fun postMissed(ctx: Context, info: RingInfo) {
+        val t = Task(info.taskId, info.title, info.stars, true, ReminderType.NOTIFY)
+        post(ctx, t, info.key, "Bạn đã bỏ lỡ nhắc nhở · " + info.text)
     }
 
     /** Nút "Thử ngay" trong hộp thoại sửa việc. */
-    fun test(ctx: Context, t: Task) = post(ctx, t, 999_999, "Đây là thông báo thử")
+    fun test(ctx: Context, t: Task) = ring(ctx, t, 999_999, "Đây là thông báo thử")
 }
 
 class AlarmReceiver : BroadcastReceiver() {
