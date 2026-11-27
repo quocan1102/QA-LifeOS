@@ -1,7 +1,7 @@
 # QA LifeOS – Hệ điều hành cuộc sống (Android)
 
 Nhà phát triển: Quốc Ân
-Phiên bản: 2.0.2
+Phiên bản: 2.1.0
 
 Ứng dụng lập kế hoạch và nhắc việc hằng ngày (Kotlin + Jetpack Compose, minSdk 26).
 
@@ -24,3 +24,6 @@ Mở thư mục này, đợi Gradle đồng bộ, chọn *Build > Build APK(s)*.
 - Thứ tự tab: Kế hoạch, Thời khóa biểu, Phát sinh, Danh sách việc. Kế hoạch xem được theo ngày, tuần, tháng; mọi nơi đều ghi cả dương lịch và âm lịch (mùng 1 và ngày cuối tháng âm màu đỏ).
 - Nhắc việc đến giờ: hiện trên màn hình khóa, thanh trạng thái và cửa sổ nổi; mỗi lần kêu tối đa 3 phút, nhắc lại sau mỗi 3 phút cho tới khi bấm "Đã làm".
 - Thông báo cao cấp (nút Cài đặt): nhắc khi việc đang làm "đã qua / còn lại" a "% / phút", đọc thành tiếng bằng giọng đọc của máy.
+- Danh sách việc: có nhóm việc tự đặt tên, thu gọn/mở rộng; mỗi việc một hàng (tên, sao, sửa, xóa), bấm vào để xem chi tiết.
+- Phát sinh: tự gõ tên việc, chọn ngày giờ bắt đầu - kết thúc (kéo dài nhiều ngày) và loại thông báo; thời lượng nhập số + đơn vị.
+- Cài đặt: mở ra là app chủ động gợi ý cấp lần lượt các quyền còn thiếu.

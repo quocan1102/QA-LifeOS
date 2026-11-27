@@ -13,6 +13,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _tasks = MutableStateFlow(repo.loadTasks())
     val tasks: StateFlow<List<Task>> = _tasks.asStateFlow()
 
+    private val _groups = MutableStateFlow(repo.loadGroups())
+    val groups: StateFlow<List<TaskGroup>> = _groups.asStateFlow()
+
     private val _slots = MutableStateFlow(repo.loadSlots())
     val slots: StateFlow<List<Slot>> = _slots.asStateFlow()
 
@@ -26,6 +29,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val keepAlive: StateFlow<Boolean> = _keepAlive.asStateFlow()
 
     init {
+        // Lưu lại ngay để dữ liệu phát sinh kiểu cũ (nếu có) được chuyển sang kiểu mới
+        repo.saveAdhoc(_adhoc.value)
         refresh()
     }
 
@@ -51,21 +56,60 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         KeepAlive.apply(ctx)
     }
 
+    // ------------------------------------------------------------ Nhóm việc
+
+    private fun createGroup(name: String): Int {
+        val g = TaskGroup(repo.nextId(), name.trim())
+        val list = _groups.value + g
+        _groups.value = list
+        repo.saveGroups(list)
+        return g.id
+    }
+
+    fun addGroup(name: String) {
+        if (name.isNotBlank()) createGroup(name)
+    }
+
+    fun renameGroup(id: Int, name: String) {
+        if (name.isBlank()) return
+        val list = _groups.value.map { if (it.id == id) it.copy(name = name.trim()) else it }
+        _groups.value = list
+        repo.saveGroups(list)
+    }
+
+    fun toggleGroup(id: Int) {
+        val list = _groups.value.map { if (it.id == id) it.copy(collapsed = !it.collapsed) else it }
+        _groups.value = list
+        repo.saveGroups(list)
+    }
+
+    /** Xóa nhóm; các việc trong nhóm không bị xóa mà chuyển sang "Chưa phân nhóm". */
+    fun deleteGroup(id: Int) {
+        val tasks = _tasks.value.map { if (it.groupId == id) it.copy(groupId = null) else it }
+        val groups = _groups.value.filterNot { it.id == id }
+        _tasks.value = tasks
+        _groups.value = groups
+        repo.saveTasks(tasks)
+        repo.saveGroups(groups)
+    }
+
     // ------------------------------------------------------------ Việc
 
-    /** id == null: thêm mới; ngược lại: cập nhật. */
+    /** id == null: thêm mới; ngược lại: cập nhật. newGroupName không rỗng: tạo nhóm mới và đưa việc vào đó. */
     fun saveTask(
         id: Int?, title: String, stars: Int, remind: Boolean,
-        type: ReminderType, ringtone: String?, vib: VibLevel
+        type: ReminderType, ringtone: String?, vib: VibLevel,
+        groupId: Int?, newGroupName: String
     ) {
+        val gid = if (newGroupName.isNotBlank()) createGroup(newGroupName) else groupId
         val list = _tasks.value
         val updated = if (id == null) {
-            list + Task(repo.nextId(), title.trim(), stars, remind, type, ringtone, vib)
+            list + Task(repo.nextId(), title.trim(), stars, remind, type, ringtone, vib, gid)
         } else {
             list.map {
                 if (it.id == id) it.copy(
                     title = title.trim(), stars = stars, remind = remind,
-                    type = type, ringtone = ringtone, vib = vib
+                    type = type, ringtone = ringtone, vib = vib, groupId = gid
                 ) else it
             }
         }
@@ -77,13 +121,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteTask(id: Int) {
         val t = _tasks.value.filterNot { it.id == id }
         val s = _slots.value.filterNot { it.taskId == id }
-        val a = _adhoc.value.filterNot { it.taskId == id }
         _tasks.value = t
         _slots.value = s
-        _adhoc.value = a
         repo.saveTasks(t)
         repo.saveSlots(s)
-        repo.saveAdhoc(a)
         refresh()
     }
 
@@ -116,31 +157,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------ Phát sinh
 
-    /** Nếu taskId == null thì tạo việc mới tên newTitle (nhắc dạng thông báo, 3 sao). */
-    private fun resolveTask(taskId: Int?, newTitle: String): Int? {
-        if (taskId != null) return taskId
-        val title = newTitle.trim()
-        if (title.isEmpty()) return null
-        val t = Task(repo.nextId(), title, 3, true, ReminderType.NOTIFY)
-        val list = _tasks.value + t
-        _tasks.value = list
-        repo.saveTasks(list)
-        return t.id
-    }
-
-    fun addAdhoc(taskId: Int?, newTitle: String, dateEpoch: Long, startMin: Int, durationMin: Int) {
-        val tid = resolveTask(taskId, newTitle) ?: return
-        val list = _adhoc.value + Adhoc(repo.nextId(), tid, dateEpoch, startMin, durationMin)
+    fun addAdhoc(a: Adhoc) {
+        val list = _adhoc.value + a.copy(id = repo.nextId())
         _adhoc.value = list
         repo.saveAdhoc(list)
         refresh()
     }
 
-    fun updateAdhoc(id: Int, taskId: Int?, newTitle: String, startMin: Int, durationMin: Int) {
-        val tid = resolveTask(taskId, newTitle) ?: return
-        val list = _adhoc.value.map {
-            if (it.id == id) it.copy(taskId = tid, startMin = startMin, durationMin = durationMin) else it
-        }
+    fun updateAdhoc(a: Adhoc) {
+        val list = _adhoc.value.map { if (it.id == a.id) a else it }
         _adhoc.value = list
         repo.saveAdhoc(list)
         refresh()

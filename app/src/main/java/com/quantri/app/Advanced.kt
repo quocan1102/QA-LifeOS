@@ -17,10 +17,10 @@ data class AdvSettings(
 
 object Advanced {
     fun clamp(value: Int, percent: Boolean): Int =
-        if (percent) value.coerceIn(1, 99) else value.coerceIn(1, 1440)
+        if (percent) value.coerceIn(1, 99) else value.coerceIn(1, 100_000)
 
     /** Thời điểm nhắc, tính bằng mili-giây kể từ lúc việc bắt đầu; null nếu không hợp lệ với việc này. */
-    fun offsetMs(durationMin: Int, a: AdvSettings): Long? {
+    fun offsetMs(durationMin: Long, a: AdvSettings): Long? {
         val total = durationMin * 60_000L
         val amount = if (a.percent) total * a.value / 100 else a.value * 60_000L
         val offset = if (a.remaining) total - amount else amount
@@ -29,15 +29,12 @@ object Advanced {
 
     /**
      * Tên việc sẽ làm SAU đoạn việc thứ `index` trong kế hoạch ngày `segs`:
-     * là việc khác tên đầu tiên đứng sau nó (bỏ qua các đoạn cùng việc nối liền nhau và việc đã bị xóa).
+     * là việc khác tên đầu tiên đứng sau nó (bỏ qua các đoạn cùng tên nối liền nhau).
      */
-    fun nextTitleAfter(segs: List<Segment>, index: Int, byId: Map<Int, Task>): String? {
+    fun nextTitleAfter(segs: List<Segment>, index: Int): String? {
         val current = segs[index]
         for (j in index + 1 until segs.size) {
-            val s = segs[j]
-            if (s.taskId == current.taskId) continue
-            val title = byId[s.taskId]?.title
-            if (title != null) return title
+            if (segs[j].key != current.key) return segs[j].title
         }
         return null
     }
@@ -54,17 +51,13 @@ object Advanced {
         now: Long
     ): Pair<String, String?>? {
         val zone = ZoneId.systemDefault()
-        val byId = tasks.associateBy { it.id }
         val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
         for (i in 0..60) {
             val date = today.plusDays(i.toLong())
-            val segs = Plan.forDate(date, slots, adhoc).filter { byId.containsKey(it.taskId) }
+            val segs = Plan.forDate(date, tasks, slots, adhoc)
             val dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli()
             val idx = segs.indexOfFirst { dayStart + it.endMin * 60_000L > now }
-            if (idx >= 0) {
-                val current = byId.getValue(segs[idx].taskId).title
-                return current to nextTitleAfter(segs, idx, byId)
-            }
+            if (idx >= 0) return segs[idx].title to nextTitleAfter(segs, idx)
         }
         return null
     }

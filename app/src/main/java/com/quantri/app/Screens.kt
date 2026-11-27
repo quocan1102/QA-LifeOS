@@ -1,5 +1,6 @@
 package com.quantri.app
 
+import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -22,36 +24,43 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.LocalDate
 import java.time.YearMonth
 
-// =============================================================== Bộ chọn Bắt đầu / Kết thúc / Thời lượng
+// =============================================================== Chọn Bắt đầu / Kết thúc / Thời lượng
 
 enum class TimeField { START, END, DURATION }
 
 /**
- * Giữ 3 giá trị (phút). Người dùng chỉ "chọn" 2 trong 3; giá trị còn lại tự được tính.
+ * Giữ 3 giá trị (đơn vị: phút). Người dùng chỉ "chọn" 2 trong 3; giá trị còn lại tự được tính.
  * Hai mục được sửa gần nhất là hai mục được chọn; sửa mục thứ ba thì mục được sửa lâu nhất bị tính lại.
- * Một khung giờ không được vượt qua 24:00.
+ *  sameDay = true : cả khoảng nằm trong một ngày, giá trị là phút trong ngày (0..1440) - dùng cho Thời khóa biểu.
+ *  sameDay = false: giá trị là thời điểm tuyệt đối (epochDay * 1440 + phút), có thể kéo dài nhiều ngày.
  */
-class TimeRangeState(initStart: Int, initDuration: Int) {
-    private val initEnd = minOf(initStart + initDuration, 1440)
-    var start by mutableIntStateOf(initStart)
-    var end by mutableIntStateOf(initEnd)
-    var duration by mutableIntStateOf(initEnd - initStart)
+class RangeState(initStart: Long, initDuration: Long, private val sameDay: Boolean) {
+    var start by mutableLongStateOf(initStart)
+    var end by mutableLongStateOf(0L)
+    var duration by mutableLongStateOf(0L)
 
     private var older = TimeField.DURATION
     private var newer = TimeField.START
+
+    init {
+        val e = if (sameDay) minOf(initStart + initDuration, 1440L) else initStart + initDuration
+        end = e
+        duration = e - initStart
+    }
 
     val computed: TimeField
         get() = TimeField.entries.first { it != older && it != newer }
 
     val valid: Boolean
-        get() = duration > 0 && start >= 0 && end <= 1440
+        get() = duration > 0 && (!sameDay || (start >= 0 && end <= 1440))
 
-    fun set(field: TimeField, value: Int) {
+    fun set(field: TimeField, value: Long) {
         when (field) {
             TimeField.START -> start = value
             TimeField.END -> end = value
@@ -68,7 +77,7 @@ class TimeRangeState(initStart: Int, initDuration: Int) {
         when (computed) {
             TimeField.END -> {
                 end = start + duration
-                if (end > 1440) {
+                if (sameDay && end > 1440) {
                     end = 1440
                     duration = end - start
                 }
@@ -76,7 +85,7 @@ class TimeRangeState(initStart: Int, initDuration: Int) {
             TimeField.DURATION -> duration = end - start
             TimeField.START -> {
                 start = end - duration
-                if (start < 0) {
+                if (sameDay && start < 0) {
                     start = 0
                     duration = end
                 }
@@ -85,60 +94,141 @@ class TimeRangeState(initStart: Int, initDuration: Int) {
     }
 }
 
+enum class DurUnit(val label: String, val minutes: Long) {
+    MINUTE("Phút", 1L),
+    HOUR("Giờ", 60L),
+    DAY("Ngày", 1440L)
+}
+
+/** Đơn vị lớn nhất chia hết thời lượng (để hiển thị số nguyên đẹp). */
+fun autoUnit(d: Long, units: List<DurUnit>): DurUnit =
+    units.sortedByDescending { it.minutes }.firstOrNull { d > 0 && d % it.minutes == 0L }
+        ?: units.minByOrNull { it.minutes }
+        ?: DurUnit.MINUTE
+
 @Composable
-fun TimeRow(label: String, value: String, computed: Boolean, onClick: () -> Unit) {
+fun ComputedNote(show: Boolean) {
+    if (show) Text("tự tính", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+}
+
+/** Chỉ chọn giờ (dùng cho Thời khóa biểu). */
+@Composable
+fun TimeOnlyRow(label: String, minutes: Long, computed: Boolean, onChange: (Long) -> Unit) {
+    val ctx = LocalContext.current
+    val m = minOf(minutes, 1439L).toInt()
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(label)
-            if (computed) {
-                Text("tự tính", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            ComputedNote(computed)
+        }
+        OutlinedButton(onClick = {
+            TimePickerDialog(ctx, { _, h, mm -> onChange((h * 60 + mm).toLong()) }, m / 60, m % 60, true).show()
+        }) { Text(fmtTime(minutes.toInt())) }
+    }
+}
+
+/** Chọn cả ngày và giờ (dùng cho Phát sinh). */
+@Composable
+fun DateTimeRow(label: String, abs: Long, computed: Boolean, onChange: (Long) -> Unit) {
+    val ctx = LocalContext.current
+    val day = Math.floorDiv(abs, 1440L)
+    val min = Math.floorMod(abs, 1440L).toInt()
+    val date = LocalDate.ofEpochDay(day)
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row {
+            Text(label)
+            Text("  ")
+            ComputedNote(computed)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                DatePickerDialog(
+                    ctx,
+                    { _, y, mo, d -> onChange(LocalDate.of(y, mo + 1, d).toEpochDay() * 1440L + min) },
+                    date.year, date.monthValue - 1, date.dayOfMonth
+                ).show()
+            }) { Text(date.format(DATE_FMT)) }
+            OutlinedButton(onClick = {
+                TimePickerDialog(
+                    ctx, { _, h, mm -> onChange(day * 1440L + h * 60 + mm) }, min / 60, min % 60, true
+                ).show()
+            }) { Text(fmtTime(min)) }
+        }
+    }
+}
+
+/** Thời lượng: gõ số và chọn đơn vị (phút / giờ / ngày). */
+@Composable
+fun DurationInput(s: RangeState, units: List<DurUnit>) {
+    var unit by remember { mutableStateOf(autoUnit(s.duration, units)) }
+    var text by remember { mutableStateOf(if (s.duration > 0) (s.duration / unit.minutes).toString() else "") }
+    var menu by remember { mutableStateOf(false) }
+
+    // Khi thời lượng do hệ thống tự tính (hoặc bị điều chỉnh cho vừa trong ngày) thì hiển thị lại cho khớp
+    LaunchedEffect(s.duration, s.computed) {
+        val typed = text.toLongOrNull()
+        val consistent = typed != null && typed * unit.minutes == s.duration
+        if (s.computed == TimeField.DURATION || (typed != null && !consistent)) {
+            val u = autoUnit(s.duration, units)
+            unit = u
+            text = if (s.duration > 0) (s.duration / u.minutes).toString() else ""
+        }
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Thời lượng")
+            ComputedNote(s.computed == TimeField.DURATION)
+        }
+        OutlinedTextField(
+            value = text,
+            onValueChange = { v ->
+                val digits = v.filter { it.isDigit() }.take(6)
+                text = digits
+                digits.toLongOrNull()?.let { n -> if (n > 0) s.set(TimeField.DURATION, n * unit.minutes) }
+            },
+            modifier = Modifier.width(92.dp),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+        )
+        Spacer(Modifier.width(6.dp))
+        Box {
+            OutlinedButton(onClick = { menu = true }) { Text(unit.label + " ▾") }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                units.forEach { u ->
+                    DropdownMenuItem(
+                        text = { Text(u.label) },
+                        onClick = {
+                            unit = u
+                            text.toLongOrNull()?.let { n -> if (n > 0) s.set(TimeField.DURATION, n * u.minutes) }
+                            menu = false
+                        }
+                    )
+                }
             }
         }
-        OutlinedButton(onClick = onClick) { Text(value) }
     }
 }
 
 @Composable
-fun TimeRangeEditor(s: TimeRangeState) {
-    val ctx = LocalContext.current
-    fun pick(field: TimeField, current: Int) {
-        val c = minOf(current, 1439)
-        TimePickerDialog(ctx, { _, h, m -> s.set(field, h * 60 + m) }, c / 60, c % 60, true).show()
-    }
-
+fun RangeEditor(s: RangeState, withDate: Boolean, units: List<DurUnit>) {
     Text(
-        "Chọn 2 trong 3 mục (giờ bắt đầu, giờ kết thúc, thời lượng). Mục còn lại sẽ tự được tính.",
+        "Chọn 2 trong 3 mục (bắt đầu, kết thúc, thời lượng). Mục còn lại sẽ tự được tính.",
         style = MaterialTheme.typography.bodySmall,
         color = Color.Gray
     )
-    TimeRow("Giờ bắt đầu", fmtTime(s.start), s.computed == TimeField.START) {
-        pick(TimeField.START, s.start)
+    if (withDate) {
+        DateTimeRow("Bắt đầu", s.start, s.computed == TimeField.START) { s.set(TimeField.START, it) }
+        DateTimeRow("Kết thúc", s.end, s.computed == TimeField.END) { s.set(TimeField.END, it) }
+    } else {
+        TimeOnlyRow("Giờ bắt đầu", s.start, s.computed == TimeField.START) { s.set(TimeField.START, it) }
+        TimeOnlyRow("Giờ kết thúc", s.end, s.computed == TimeField.END) { s.set(TimeField.END, it) }
     }
-    TimeRow("Giờ kết thúc", fmtTime(s.end), s.computed == TimeField.END) {
-        pick(TimeField.END, s.end)
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("Thời lượng")
-            if (s.computed == TimeField.DURATION) {
-                Text("tự tính", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-            }
-        }
-        Text(if (s.duration > 0) fmtDuration(s.duration) else "—", fontWeight = FontWeight.Medium)
-    }
-    Row(
-        Modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        listOf(-15, -5, 5, 15).forEach { delta ->
-            OutlinedButton(onClick = {
-                s.set(TimeField.DURATION, (s.duration + delta).coerceIn(5, 1440))
-            }) { Text(if (delta > 0) "+$delta" else "−${-delta}") }
-        }
-    }
+    DurationInput(s, units)
     if (!s.valid) {
         Text(
-            "Giờ kết thúc phải sau giờ bắt đầu (trong cùng một ngày).",
+            if (withDate) "Thời điểm kết thúc phải sau thời điểm bắt đầu."
+            else "Giờ kết thúc phải sau giờ bắt đầu (trong cùng một ngày).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error
         )
@@ -152,7 +242,7 @@ fun TimetableScreen(tasks: List<Task>, slots: List<Slot>, vm: MainViewModel) {
     if (tasks.isEmpty()) {
         Box(Modifier.fillMaxSize()) {
             Text(
-                "Hãy thêm việc ở tab \"Việc\" trước,\nrồi quay lại đây để xếp lịch.",
+                "Hãy thêm việc ở tab \"Danh sách việc\" trước,\nrồi quay lại đây để xếp lịch.",
                 modifier = Modifier.align(Alignment.Center).padding(32.dp),
                 color = Color.Gray
             )
@@ -283,7 +373,9 @@ fun SlotDialog(
 ) {
     var taskId by remember { mutableIntStateOf(initial?.taskId ?: tasks.first().id) }
     var days by remember { mutableStateOf(setOf(initial?.day ?: initialDay)) }
-    val time = remember { TimeRangeState(initial?.startMin ?: 7 * 60, initial?.durationMin ?: 60) }
+    val time = remember {
+        RangeState((initial?.startMin ?: 7 * 60).toLong(), (initial?.durationMin ?: 60).toLong(), sameDay = true)
+    }
     var expanded by remember { mutableStateOf(false) }
     val current = tasks.firstOrNull { it.id == taskId } ?: tasks.first()
 
@@ -336,13 +428,14 @@ fun SlotDialog(
                     }
                 }
 
-                TimeRangeEditor(time)
+                // Khung giờ cố định nằm trong một ngày nên chỉ có đơn vị Phút và Giờ
+                RangeEditor(time, withDate = false, units = listOf(DurUnit.MINUTE, DurUnit.HOUR))
             }
         },
         confirmButton = {
             TextButton(
                 enabled = days.isNotEmpty() && time.valid,
-                onClick = { onSave(taskId, days, time.start, time.duration) }
+                onClick = { onSave(taskId, days, time.start.toInt(), time.duration.toInt()) }
             ) { Text("Lưu") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Hủy") } }
@@ -481,7 +574,7 @@ fun PlanScreen(
             when (view) {
                 0 -> PlanDay(tasks, slots, adhoc, date)
                 1 -> PlanWeek(tasks, slots, adhoc, date) { d -> onDay(d.toEpochDay()); onView(0) }
-                else -> PlanMonth(slots, adhoc, date) { d -> onDay(d.toEpochDay()); onView(0) }
+                else -> PlanMonth(tasks, slots, adhoc, date) { d -> onDay(d.toEpochDay()); onView(0) }
             }
         }
     }
@@ -548,8 +641,7 @@ fun PlanNav(view: Int, date: LocalDate, onDay: (Long) -> Unit) {
 
 @Composable
 fun PlanDay(tasks: List<Task>, slots: List<Slot>, adhoc: List<Adhoc>, date: LocalDate) {
-    val byId = tasks.associateBy { it.id }
-    val segs = Plan.forDate(date, slots, adhoc)
+    val segs = Plan.forDate(date, tasks, slots, adhoc)
 
     if (segs.isEmpty()) {
         Box(Modifier.fillMaxSize()) {
@@ -582,7 +674,7 @@ fun PlanDay(tasks: List<Task>, slots: List<Slot>, adhoc: List<Adhoc>, date: Loca
                 }
             }
             maxEnd = maxOf(maxEnd, s.endMin)
-            item { SegmentCard(s, byId[s.taskId]) }
+            item { SegmentCard(s) }
         }
     }
 }
@@ -596,7 +688,6 @@ fun PlanWeek(
     onPickDay: (LocalDate) -> Unit
 ) {
     val monday = anchor.minusDays((anchor.dayOfWeek.value - 1).toLong())
-    val byId = tasks.associateBy { it.id }
     val today = LocalDate.now()
 
     LazyColumn(
@@ -606,7 +697,7 @@ fun PlanWeek(
     ) {
         items(7) { i ->
             val date = monday.plusDays(i.toLong())
-            val segs = Plan.forDate(date, slots, adhoc)
+            val segs = Plan.forDate(date, tasks, slots, adhoc)
             Card(Modifier.fillMaxWidth().clickable { onPickDay(date) }) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -635,8 +726,7 @@ fun PlanWeek(
                                     fontWeight = FontWeight.Medium
                                 )
                                 Text(
-                                    (byId[s.taskId]?.title ?: "(đã xóa)") +
-                                        if (s.source == Source.ADHOC) " · phát sinh" else "",
+                                    s.title + if (s.source == Source.ADHOC) " · phát sinh" else "",
                                     fontSize = 13.sp
                                 )
                             }
@@ -650,16 +740,17 @@ fun PlanWeek(
 
 @Composable
 fun PlanMonth(
+    tasks: List<Task>,
     slots: List<Slot>,
     adhoc: List<Adhoc>,
     anchor: LocalDate,
     onPickDay: (LocalDate) -> Unit
 ) {
     val first = anchor.withDayOfMonth(1)
-    val counts = remember(slots, adhoc, first) {
+    val counts = remember(tasks, slots, adhoc, first) {
         (0 until first.lengthOfMonth()).associate { d ->
             val date = first.plusDays(d.toLong())
-            date.toEpochDay() to Plan.forDate(date, slots, adhoc).size
+            date.toEpochDay() to Plan.forDate(date, tasks, slots, adhoc).size
         }
     }
     Column(
@@ -676,7 +767,8 @@ fun PlanMonth(
 }
 
 @Composable
-fun SegmentCard(s: Segment, t: Task?) {
+fun SegmentCard(s: Segment) {
+    val multiDay = s.originEnd - s.originStart > 1440L || !s.startsHere || s.continuesToNext
     Card(Modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
@@ -684,8 +776,15 @@ fun SegmentCard(s: Segment, t: Task?) {
         ) {
             Column(Modifier.weight(1f)) {
                 Text(fmtTime(s.startMin) + " – " + fmtTime(s.endMin), fontWeight = FontWeight.Bold)
-                Text(t?.title ?: "(đã xóa)")
-                if (t != null) Stars(t.stars)
+                Text(s.title)
+                if (s.stars > 0) Stars(s.stars)
+                if (multiDay) {
+                    Text(
+                        "Cả việc: " + fmtDateTimeShort(s.originStart) + " → " + fmtDateTimeShort(s.originEnd),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
@@ -698,7 +797,7 @@ fun SegmentCard(s: Segment, t: Task?) {
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Gray
                 )
-                if (t != null && t.remind) Text("🔔", fontSize = 14.sp)
+                if (s.remind) Text("🔔", fontSize = 14.sp)
             }
         }
     }
@@ -708,8 +807,6 @@ fun SegmentCard(s: Segment, t: Task?) {
 
 @Composable
 fun AdhocScreen(
-    tasks: List<Task>,
-    slots: List<Slot>,
     adhoc: List<Adhoc>,
     vm: MainViewModel,
     selectedEpoch: Long,
@@ -719,10 +816,14 @@ fun AdhocScreen(
 ) {
     val first = LocalDate.ofEpochDay(monthEpoch)
     val last = first.plusDays((first.lengthOfMonth() - 1).toLong())
-    val counts = adhoc.groupingBy { it.date }.eachCount()
-    val taskById = tasks.associateBy { it.id }
+    val counts = remember(adhoc, first) {
+        (0 until first.lengthOfMonth()).associate { i ->
+            val ep = first.toEpochDay() + i
+            ep to adhoc.count { it.coversDate(ep) }
+        }
+    }
     val selectedDate = LocalDate.ofEpochDay(selectedEpoch)
-    val dayEntries = adhoc.filter { it.date == selectedEpoch }.sortedBy { it.startMin }
+    val dayEntries = adhoc.filter { it.coversDate(selectedEpoch) }.sortedBy { it.absStart }
 
     var editing by remember { mutableStateOf<Adhoc?>(null) }
     var showDialog by remember { mutableStateOf(false) }
@@ -769,19 +870,30 @@ fun AdhocScreen(
                 }
             }
             items(dayEntries, key = { it.id }) { a ->
-                val t = taskById[a.taskId]
+                val span = if (a.startDate == a.endDate) {
+                    fmtTime(a.startMin) + " – " + fmtTime(a.endMin)
+                } else {
+                    fmtDateTimeShort(a.absStart) + " → " + fmtDateTimeShort(a.absEnd)
+                }
+                val info = when {
+                    !a.remind -> "Không nhắc"
+                    a.type == ReminderType.NOTIFY -> "Chỉ hiện thông báo"
+                    a.type == ReminderType.VIBRATE -> "Rung"
+                    else -> "Chuông báo"
+                }
                 Card(Modifier.fillMaxWidth()) {
                     Row(
                         Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(Modifier.weight(1f)) {
+                            Text(span, fontWeight = FontWeight.Bold)
+                            Text(a.title)
                             Text(
-                                fmtTime(a.startMin) + " – " + fmtTime(minOf(a.startMin + a.durationMin, 1440)),
-                                fontWeight = FontWeight.Bold
+                                fmtDuration(a.absEnd - a.absStart) + " · " + info,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.Gray
                             )
-                            Text(t?.title ?: "(đã xóa)")
-                            if (t != null) Stars(t.stars)
                         }
                         IconButton(onClick = { editing = a; showDialog = true }) {
                             Icon(Icons.Default.Edit, contentDescription = "Sửa")
@@ -801,36 +913,46 @@ fun AdhocScreen(
 
     if (showDialog) {
         AdhocDialog(
-            tasks = tasks,
             initial = editing,
             date = selectedDate,
             onDismiss = { showDialog = false },
-            onSave = { taskId, newTitle, start, duration ->
-                val ed = editing
-                if (ed == null) {
-                    vm.addAdhoc(taskId, newTitle, selectedEpoch, start, duration)
-                } else {
-                    vm.updateAdhoc(ed.id, taskId, newTitle, start, duration)
-                }
+            onSave = { a ->
+                if (editing == null) vm.addAdhoc(a) else vm.updateAdhoc(a)
                 showDialog = false
             }
         )
     }
 }
 
+/** Thêm / sửa việc phát sinh: tự gõ tên, chọn ngày giờ bắt đầu - kết thúc (nhiều ngày) và loại thông báo. */
 @Composable
 fun AdhocDialog(
-    tasks: List<Task>,
     initial: Adhoc?,
     date: LocalDate,
     onDismiss: () -> Unit,
-    onSave: (taskId: Int?, newTitle: String, startMin: Int, durationMin: Int) -> Unit
+    onSave: (Adhoc) -> Unit
 ) {
-    var taskId by remember { mutableStateOf(initial?.taskId ?: tasks.firstOrNull()?.id) }
-    var newTitle by remember { mutableStateOf("") }
-    val time = remember { TimeRangeState(initial?.startMin ?: 8 * 60, initial?.durationMin ?: 60) }
-    var expanded by remember { mutableStateOf(false) }
-    val currentTitle = tasks.firstOrNull { it.id == taskId }?.title
+    // 0 = không nhắc, 1 = chỉ thông báo, 2 = rung, 3 = chuông báo
+    val modes = listOf("Không nhắc", "Chỉ hiện thông báo", "Rung", "Chuông báo")
+    var title by remember { mutableStateOf(initial?.title ?: "") }
+    var mode by remember {
+        mutableIntStateOf(
+            when {
+                initial == null -> 1
+                !initial.remind -> 0
+                initial.type == ReminderType.VIBRATE -> 2
+                initial.type == ReminderType.ALARM -> 3
+                else -> 1
+            }
+        )
+    }
+    val time = remember {
+        RangeState(
+            initial?.absStart ?: (date.toEpochDay() * 1440L + 8 * 60),
+            initial?.let { it.absEnd - it.absStart } ?: 60L,
+            sameDay = false
+        )
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -840,38 +962,31 @@ fun AdhocDialog(
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(dayTitle(date), fontWeight = FontWeight.Medium)
-                Text("Việc")
-                Box {
-                    OutlinedButton(onClick = { expanded = true }) {
-                        Text(currentTitle ?: "＋ Việc mới")
-                    }
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        tasks.forEach { t ->
-                            DropdownMenuItem(
-                                text = { Text(t.title) },
-                                onClick = { taskId = t.id; expanded = false }
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text("＋ Việc mới…") },
-                            onClick = { taskId = null; expanded = false }
-                        )
-                    }
-                }
-                if (currentTitle == null) {
-                    OutlinedTextField(
-                        value = newTitle,
-                        onValueChange = { newTitle = it },
-                        label = { Text("Tên việc mới") },
-                        singleLine = true
-                    )
-                }
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Tên công việc") },
+                    singleLine = true
+                )
 
-                TimeRangeEditor(time)
+                RangeEditor(
+                    time, withDate = true,
+                    units = listOf(DurUnit.MINUTE, DurUnit.HOUR, DurUnit.DAY)
+                )
+
+                Text("Loại thông báo")
+                modes.forEachIndexed { i, label ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { mode = i },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = mode == i, onClick = { mode = i })
+                        Text(label)
+                    }
+                }
 
                 Text(
-                    "Nếu trùng giờ với Thời khóa biểu: cùng việc thì thay thế khung cố định đó, khác việc thì cắt phần trùng.",
+                    "Nếu trùng giờ với Thời khóa biểu: cùng tên việc thì thay thế khung cố định đó, khác tên thì cắt phần trùng.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.Gray
                 )
@@ -879,8 +994,29 @@ fun AdhocDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = time.valid && (currentTitle != null || newTitle.isNotBlank()),
-                onClick = { onSave(taskId, newTitle, time.start, time.duration) }
+                enabled = title.isNotBlank() && time.valid,
+                onClick = {
+                    val s = time.start
+                    val e = time.end
+                    onSave(
+                        Adhoc(
+                            id = initial?.id ?: 0,
+                            title = title.trim(),
+                            startDate = Math.floorDiv(s, 1440L),
+                            startMin = Math.floorMod(s, 1440L).toInt(),
+                            endDate = Math.floorDiv(e, 1440L),
+                            endMin = Math.floorMod(e, 1440L).toInt(),
+                            remind = mode != 0,
+                            type = when (mode) {
+                                2 -> ReminderType.VIBRATE
+                                3 -> ReminderType.ALARM
+                                else -> ReminderType.NOTIFY
+                            },
+                            ringtone = initial?.ringtone,
+                            vib = initial?.vib ?: VibLevel.MEDIUM
+                        )
+                    )
+                }
             ) { Text("Lưu") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Hủy") } }

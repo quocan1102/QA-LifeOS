@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Card
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -30,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -46,6 +48,70 @@ private fun openSettings(ctx: Context, primary: Intent, fallback: Intent? = null
     val ok = runCatching { ctx.startActivity(primary.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess
     if (!ok && fallback != null) {
         runCatching { ctx.startActivity(fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+}
+
+/** Các quyền app cần để nhắc việc đầy đủ. */
+enum class Perm { NOTIFICATIONS, EXACT_ALARM, FULL_SCREEN, BATTERY }
+
+object Perms {
+    fun isOk(ctx: Context, p: Perm): Boolean = when (p) {
+        Perm.NOTIFICATIONS -> NotificationManagerCompat.from(ctx).areNotificationsEnabled()
+        Perm.EXACT_ALARM ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                ctx.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
+            } else true
+        Perm.FULL_SCREEN ->
+            if (Build.VERSION.SDK_INT >= 34) {
+                ctx.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+            } else true
+        Perm.BATTERY ->
+            ctx.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(ctx.packageName)
+    }
+
+    fun missing(ctx: Context): List<Perm> = Perm.entries.filter { !isOk(ctx, it) }
+
+    /** Mở hộp thoại / màn hình hệ thống để người dùng cấp quyền. */
+    fun request(ctx: Context, p: Perm, requestNotif: () -> Unit) {
+        val pkg = ctx.packageName
+        val pkgUri = Uri.parse("package:$pkg")
+        val details = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri)
+        when (p) {
+            Perm.NOTIFICATIONS ->
+                if (Build.VERSION.SDK_INT >= 33) {
+                    requestNotif()
+                } else {
+                    openSettings(
+                        ctx,
+                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, pkg),
+                        details
+                    )
+                }
+            Perm.EXACT_ALARM ->
+                openSettings(ctx, Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, pkgUri), details)
+            Perm.FULL_SCREEN ->
+                openSettings(ctx, Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, pkgUri), details)
+            Perm.BATTERY ->
+                openSettings(
+                    ctx,
+                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, pkgUri),
+                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                )
+        }
+    }
+
+    fun label(p: Perm): String = when (p) {
+        Perm.NOTIFICATIONS -> "Thông báo"
+        Perm.EXACT_ALARM -> "Báo thức chính xác"
+        Perm.FULL_SCREEN -> "Hiện màn hình báo thức khi khóa máy"
+        Perm.BATTERY -> "Không bị tối ưu pin"
+    }
+
+    fun actionLabel(p: Perm): String = when (p) {
+        Perm.NOTIFICATIONS -> "Cấp quyền"
+        Perm.EXACT_ALARM -> "Cấp quyền"
+        Perm.FULL_SCREEN -> "Cấp quyền"
+        Perm.BATTERY -> "Cho phép"
     }
 }
 
@@ -180,7 +246,10 @@ fun AdvancedSection(
     }
 }
 
-/** Kiểm tra và hướng dẫn bật các quyền để nhắc việc đúng giờ; cài đặt thông báo cao cấp. */
+/**
+ * Cài đặt: thông báo cao cấp và các quyền cần thiết.
+ * Khi mở, app chủ động gợi ý cấp lần lượt từng quyền còn thiếu (mỗi quyền một lần cho mỗi lần mở).
+ */
 @Composable
 fun SettingsDialog(
     resumeTick: Int,
@@ -189,26 +258,22 @@ fun SettingsDialog(
     adv: AdvSettings,
     onAdv: (AdvSettings) -> Unit,
     sample: Pair<String, String?>?,
+    onRequestNotif: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val ctx = LocalContext.current
-    val pkg = ctx.packageName
-    val pkgUri = Uri.parse("package:$pkg")
 
-    // resumeTick đổi mỗi khi quay lại app từ màn hình cài đặt hệ thống => kiểm tra lại
-    val notifOk = remember(resumeTick) { NotificationManagerCompat.from(ctx).areNotificationsEnabled() }
-    val exactOk = remember(resumeTick) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ctx.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
-        } else true
-    }
-    val fullScreenOk = remember(resumeTick) {
-        if (Build.VERSION.SDK_INT >= 34) {
-            ctx.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
-        } else true
-    }
-    val batteryOk = remember(resumeTick) {
-        ctx.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(pkg)
+    // resumeTick đổi mỗi khi quay lại app từ màn hình cấp quyền => kiểm tra lại
+    val missing = remember(resumeTick) { Perms.missing(ctx) }
+    val asked = remember { mutableStateListOf<Perm>() }
+
+    // Chủ động gợi ý: mở lần lượt từng quyền còn thiếu
+    LaunchedEffect(resumeTick) {
+        val next = missing.firstOrNull { it !in asked }
+        if (next != null) {
+            asked.add(next)
+            Perms.request(ctx, next, onRequestNotif)
+        }
     }
 
     AlertDialog(
@@ -219,17 +284,30 @@ fun SettingsDialog(
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                if (missing.isNotEmpty()) {
+                    Card {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                "Cần cấp thêm " + missing.size + " quyền để nhắc việc đầy đủ",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                missing.joinToString("\n") { "• " + Perms.label(it) },
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            OutlinedButton(onClick = { asked.clear(); Perms.request(ctx, missing.first(), onRequestNotif); asked.add(missing.first()) }) {
+                                Text("Cấp quyền ngay")
+                            }
+                        }
+                    }
+                }
+
                 AdvancedSection(adv, onAdv, sample)
 
                 HorizontalDivider()
 
                 Text("Chạy nền & thông báo", fontWeight = FontWeight.Bold)
-                Text(
-                    "Để nhắc việc đúng giờ trong mọi trường hợp (kể cả khi đã tắt app hoặc máy đang ngủ), " +
-                        "hãy bật đủ các mục dưới đây.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -243,51 +321,13 @@ fun SettingsDialog(
                     Switch(checked = keepAlive, onCheckedChange = onKeepAlive)
                 }
 
-                StatusRow("Thông báo", notifOk, "Mở cài đặt") {
-                    openSettings(
-                        ctx,
-                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                            .putExtra(Settings.EXTRA_APP_PACKAGE, pkg),
-                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri)
-                    )
+                Perm.entries.forEach { p ->
+                    StatusRow(
+                        Perms.label(p),
+                        ok = p !in missing,
+                        actionLabel = Perms.actionLabel(p)
+                    ) { Perms.request(ctx, p, onRequestNotif) }
                 }
-                StatusRow("Báo thức chính xác", exactOk, "Cấp quyền") {
-                    openSettings(
-                        ctx,
-                        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, pkgUri),
-                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri)
-                    )
-                }
-                StatusRow("Hiện màn hình báo thức khi khóa máy", fullScreenOk, "Cấp quyền") {
-                    openSettings(
-                        ctx,
-                        Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, pkgUri),
-                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri)
-                    )
-                }
-                StatusRow("Không bị tối ưu pin", batteryOk, "Cho phép") {
-                    openSettings(
-                        ctx,
-                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, pkgUri),
-                        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                    )
-                }
-
-                HorizontalDivider()
-
-                Text("Với Xiaomi, Oppo, Vivo, Realme, Samsung…", fontWeight = FontWeight.Medium)
-                Text(
-                    "Mở Thông tin ứng dụng rồi: đặt Pin / Tiết kiệm pin thành \"Không hạn chế\"; " +
-                        "bật \"Tự khởi động\" (Autostart); và khóa app trong màn hình đa nhiệm " +
-                        "(biểu tượng ổ khóa hoặc kéo xuống) để hệ thống không tự dọn.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                OutlinedButton(
-                    onClick = {
-                        openSettings(ctx, Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri))
-                    },
-                    modifier = Modifier.padding(top = 2.dp)
-                ) { Text("Mở thông tin ứng dụng") }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Xong") } }

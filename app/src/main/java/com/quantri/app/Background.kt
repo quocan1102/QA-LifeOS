@@ -47,7 +47,7 @@ object KeepAlive {
                 today.plusDays(1) -> "ngày mai"
                 else -> next.date.format(DATE_FMT)
             }
-            "Kế tiếp: " + next.task.title + " · " + fmtTime(next.seg.startMin) + " " + whenText
+            "Kế tiếp: " + next.seg.title + " · " + fmtTime(next.seg.startMin) + " " + whenText
         }
 
         val open = PendingIntent.getActivity(

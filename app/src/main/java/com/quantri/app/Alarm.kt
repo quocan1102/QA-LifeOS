@@ -356,7 +356,7 @@ class AlarmService : Service() {
         )
         val b = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(info.title + "  " + "★".repeat(info.stars))
+            .setContentTitle(titleWithStars(info.title, info.stars))
             .setContentText(info.text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(info.text))
             .setCategory(
@@ -385,7 +385,7 @@ class AlarmService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_WAIT)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(info.title + "  " + "★".repeat(info.stars))
+            .setContentTitle(titleWithStars(info.title, info.stars))
             .setContentText("Chưa xác nhận · sẽ nhắc lại sau 3 phút")
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -468,8 +468,10 @@ fun AlarmScreen(onDone: () -> Unit, onMute: () -> Unit, onGone: () -> Unit) {
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
-            Spacer(Modifier.height(8.dp))
-            Text("★".repeat(i.stars), color = StarColor, fontSize = 26.sp)
+            if (i.stars > 0) {
+                Spacer(Modifier.height(8.dp))
+                Text("★".repeat(i.stars), color = StarColor, fontSize = 26.sp)
+            }
             Spacer(Modifier.height(16.dp))
             Text(i.text, color = Color.White, fontSize = 18.sp, textAlign = TextAlign.Center)
         }
